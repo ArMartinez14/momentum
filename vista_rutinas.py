@@ -178,7 +178,7 @@ def ver_rutinas():
 
     # === 8️⃣ BOTÓN GUARDAR CAMBIOS ===
             # === 8️⃣ BOTÓN GUARDAR CAMBIOS ===
-        if st.button("💾 Guardar cambios del día"):
+        if st.button("💾 Guardar cambios del día", key=f"guardar_{dia_sel}_{semana_sel}"):
             fecha_norm = semana_sel.replace("-", "_")
             doc_id = f"{correo_norm}_{fecha_norm}"
 
