@@ -5,7 +5,8 @@ import json
 
 # === INICIALIZAR FIREBASE ===
 if not firebase_admin._apps:
-    cred = credentials.Certificate("aplicacion-asesorias-firebase-adminsdk-fbsvc-71e1560593.json")
+    cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
+    cred = credentials.Certificate(cred_dict)
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
