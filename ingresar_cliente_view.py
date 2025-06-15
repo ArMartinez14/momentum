@@ -29,20 +29,27 @@ def ingresar_cliente_o_video():
         ["Selecciona...", "Cliente Nuevo", "Video de Ejercicio"],
         index=0
     )
-
-    # === Si elige Cliente ===
     if opcion == "Cliente Nuevo":
         # Inicializar estados si no existen
-        for key in ["nombre_cliente", "correo_cliente", "rol_cliente"]:
-            if key not in st.session_state:
-                st.session_state[key] = ""
+        if "nombre_cliente" not in st.session_state:
+            st.session_state["nombre_cliente"] = ""
+        if "correo_cliente" not in st.session_state:
+            st.session_state["correo_cliente"] = ""
+        if "rol_cliente" not in st.session_state:
+            st.session_state["rol_cliente"] = "deportista"
 
         nombre = st.text_input("Nombre del cliente:", key="nombre_cliente")
         correo = st.text_input("Correo del cliente:", key="correo_cliente")
+
+        roles = ["deportista", "entrenador", "admin"]
+        rol_actual = st.session_state.get("rol_cliente", "deportista")
+        if rol_actual not in roles:
+            rol_actual = "deportista"
+
         rol = st.selectbox(
             "Rol:",
-            ["deportista", "entrenador", "admin"],
-            index=["deportista", "entrenador", "admin"].index(st.session_state.get("rol_cliente", "deportista")),
+            roles,
+            index=roles.index(rol_actual),
             key="rol_cliente"
         )
 
@@ -69,6 +76,7 @@ def ingresar_cliente_o_video():
                     st.error(f"❌ Error al guardar: {e}")
             else:
                 st.warning("⚠️ Por favor completa todos los campos.")
+
 
     # === Si elige Video ===
     elif opcion == "Video de Ejercicio":
