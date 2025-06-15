@@ -94,6 +94,65 @@ def crear_rutinas():
 
     st.markdown("---")
 
+
+    # ✅ NUEVO BOTÓN: Previsualizar rutina
+    if st.button("🔍 Previsualizar rutina"):
+        st.subheader("📅 Previsualización de todas las semanas con progresiones aplicadas")
+
+        for semana_idx in range(1, int(semanas) + 1):
+            with st.expander(f"Semana {semana_idx}"):
+                for i, dia_nombre in enumerate(dias):
+                    dia_key = f"rutina_dia_{i + 1}"
+                    ejercicios = st.session_state.get(dia_key, [])
+                    if not ejercicios:
+                        continue
+
+                    st.write(f"**{dia_nombre}**")
+
+                    tabla = []
+                    for ejercicio in ejercicios:
+                        ejercicio_mod = ejercicio.copy()
+
+                        # Determinar sección por circuito
+                        circuito = ejercicio.get("Circuito", "")
+                        ejercicio_mod["Sección"] = "Warm Up" if circuito in ["A", "B", "C"] else "Work Out"
+
+                        # Aplicar progresiones
+                        for p in range(1, 4):
+                            variable = ejercicio.get(f"Variable_{p}", "").strip().lower()
+                            cantidad = ejercicio.get(f"Cantidad_{p}", "")
+                            operacion = ejercicio.get(f"Operacion_{p}", "").strip().lower()
+                            semanas_txt = ejercicio.get(f"Semanas_{p}", "")
+
+                            if variable and operacion and cantidad:
+                                valor_base = ejercicio_mod.get(variable.capitalize(), "")
+                                if valor_base:
+                                    valor_actual = valor_base
+                                    try:
+                                        semanas_aplicar = [int(s.strip()) for s in semanas_txt.split(",") if s.strip().isdigit()]
+                                    except:
+                                        semanas_aplicar = []
+
+                                    for s in range(2, semana_idx + 1):
+                                        if s in semanas_aplicar:
+                                            valor_actual = aplicar_progresion(valor_actual, float(cantidad), operacion)
+                                    ejercicio_mod[variable.capitalize()] = valor_actual
+
+                        tabla.append({
+                            "bloque": ejercicio_mod["Sección"],
+                            "circuito": ejercicio_mod["Circuito"],
+                            "ejercicio": ejercicio_mod["Ejercicio"],
+                            "series": ejercicio_mod["Series"],
+                            "repeticiones": ejercicio_mod["Repeticiones"],
+                            "peso": ejercicio_mod["Peso"],
+                            "tiempo": ejercicio_mod["Tiempo"],
+                            "velocidad": ejercicio_mod["Velocidad"],
+                            "rir": ejercicio_mod["RIR"],
+                            "tipo": ejercicio_mod["Tipo"]
+                        })
+
+                    st.dataframe(tabla, use_container_width=True)
+
     if st.button("Guardar Rutina"):
         if nombre_sel and correo and entrenador:
             guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias)
