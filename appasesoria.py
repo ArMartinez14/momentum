@@ -9,12 +9,13 @@ from ingresar_cliente_view import ingresar_cliente_o_video
 from crear_planificaciones import crear_rutinas
 
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore,initialize_app
 
 # === INICIALIZAR FIREBASE ===
 if not firebase_admin._apps:
-    cred = credentials.Certificate("aplicacion-asesorias-firebase-adminsdk-fbsvc-71e1560593.json")
-    firebase_admin.initialize_app(cred)
+    cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
+    cred = credentials.Certificate(cred_dict)
+    initialize_app(cred)
 db = firestore.client()
 
 # === Estado ===
