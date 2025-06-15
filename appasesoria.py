@@ -9,13 +9,16 @@ from ingresar_cliente_view import ingresar_cliente_o_video
 from crear_planificaciones import crear_rutinas
 
 import firebase_admin
-from firebase_admin import credentials, firestore,initialize_app
+from firebase_admin import credentials, firestore, initialize_app
+import json   # 👈 importante para leer el secreto
 
-# === INICIALIZAR FIREBASE ===
+# === INICIALIZAR FIREBASE desde Secrets ===
 if not firebase_admin._apps:
+    # Lee el secreto como cadena JSON y convierte a dict
     cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
     cred = credentials.Certificate(cred_dict)
     initialize_app(cred)
+
 db = firestore.client()
 
 # === Estado ===
@@ -53,7 +56,14 @@ if st.session_state.rol == "deportista":
 # === 3️⃣ Menu para admin/entrenador ===
 st.sidebar.title("Menú principal")
 
-opciones_menu = ("Inicio", "Ver Rutinas", "Crear Rutinas", "Ingresar Deportista o Video", "Borrar Rutinas", "Editar Rutinas")
+opciones_menu = (
+    "Inicio",
+    "Ver Rutinas",
+    "Crear Rutinas",
+    "Ingresar Deportista o Video",
+    "Borrar Rutinas",
+    "Editar Rutinas"
+)
 opcion = st.sidebar.radio("Selecciona una opción:", opciones_menu)
 
 if opcion == "Inicio":
