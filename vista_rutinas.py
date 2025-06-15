@@ -7,12 +7,11 @@ from herramientas import actualizar_progresiones_individual
 
 
 def ver_rutinas():
-    # === INICIALIZAR FIREBASE SOLO UNA VEZ ===
+    # === INICIALIZAR FIREBASE SOLO UNA VEZ solo una===
     if not firebase_admin._apps:
-        cred_dict = credentials.Certificate("aplicacion-asesorias-firebase-adminsdk-fbsvc-71e1560593.json")
-        with open("/tmp/firebase.json", "w") as f:
-            json.dump(cred_dict, f)
-        cred = credentials.Certificate("/tmp/firebase.json")
+        # ✅ Cargar credenciales desde el Secret de Streamlit
+        cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
+        cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred)
 
     db = firestore.client()
@@ -202,3 +201,4 @@ def ver_rutinas():
         except Exception as error:
             st.error("❌ Error al guardar.")
             st.exception(error)
+
