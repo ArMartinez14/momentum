@@ -4,10 +4,12 @@ from firebase_admin import credentials, firestore
 from datetime import datetime
 from herramientas import aplicar_progresion
 from guardar_rutina_view import guardar_rutina
+import json
 
 # === INICIALIZAR FIREBASE SOLO UNA VEZ ===
 if not firebase_admin._apps:
-    cred = credentials.Certificate("aplicacion-asesorias-firebase-adminsdk-fbsvc-71e1560593.json")
+    cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
+    cred = credentials.Certificate(cred_dict)
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
