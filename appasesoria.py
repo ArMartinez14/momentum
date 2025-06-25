@@ -7,7 +7,7 @@ from vista_rutinas import ver_rutinas
 from borrar_rutinas import borrar_rutinas
 from ingresar_cliente_view import ingresar_cliente_o_video
 from crear_planificaciones import crear_rutinas
-
+import editar_rutinas
 import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app
 import json   # 👈 importante para leer el secreto
@@ -83,4 +83,4 @@ elif opcion == "Borrar Rutinas":
 elif opcion == "Crear Rutinas":
     crear_rutinas()
 elif opcion == "Editar Rutinas":
-    st.write("Aquí iría el módulo de editar rutinas.")
+    editar_rutinas.editar_rutinas()
