@@ -59,38 +59,136 @@ def crear_rutinas():
             if st.button(f"Agregar fila en {dias[i]}", key=f"add_row_{i}"):
                 st.session_state[dia_key].append({k: "" for k in columnas_tabla})
 
-            for idx, fila in enumerate(st.session_state[dia_key]):
-                st.markdown(f"##### Ejercicio {idx + 1} - {fila.get('Ejercicio', '')}")
-                cols = st.columns(15)
-                fila["Circuito"] = cols[0].selectbox(
-                    "", ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"],
-                    index=["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"].index(fila["Circuito"]) if fila["Circuito"] else 0,
-                    key=f"circ_{i}_{idx}", label_visibility="collapsed"
-                )
-                fila["Sección"] = "Warm Up" if fila["Circuito"] in ["A", "B", "C"] else "Work Out"
-                cols[1].text(fila["Sección"])
-                fila["Ejercicio"] = cols[2].text_input("", value=fila["Ejercicio"], key=f"ej_{i}_{idx}", label_visibility="collapsed", placeholder="Ejercicio")
-                fila["Series"] = cols[3].text_input("", value=fila["Series"], key=f"ser_{i}_{idx}", label_visibility="collapsed", placeholder="Series")
-                fila["Repeticiones"] = cols[4].text_input("", value=fila["Repeticiones"], key=f"rep_{i}_{idx}", label_visibility="collapsed", placeholder="Reps")
-                fila["Peso"] = cols[5].text_input("", value=fila["Peso"], key=f"peso_{i}_{idx}", label_visibility="collapsed", placeholder="Kg")
-                fila["Tiempo"] = cols[6].text_input("", value=fila["Tiempo"], key=f"tiempo_{i}_{idx}", label_visibility="collapsed", placeholder="Seg")
-                fila["Velocidad"] = cols[7].text_input("", value=fila["Velocidad"], key=f"vel_{i}_{idx}", label_visibility="collapsed", placeholder="Vel")
-                fila["RIR"] = cols[8].text_input("", value=fila["RIR"], key=f"rir_{i}_{idx}", label_visibility="collapsed", placeholder="RIR")
-                fila["Tipo"] = cols[9].text_input("", value=fila["Tipo"], key=f"tipo_{i}_{idx}", label_visibility="collapsed", placeholder="Tipo")
-                fila["Video"] = cols[10].text_input("", value=fila["Video"], key=f"video_{i}_{idx}", label_visibility="collapsed", placeholder="Link Video")
+            for seccion in ["Warm Up", "Work Out"]:
+                st.subheader(f"{seccion}" if seccion == "Warm Up" else f"{seccion}")
 
-                for p in range(1, 4):
-                    if progresion_activa == f"Progresión {p}":
-                        fila[f"Variable_{p}"] = cols[11].selectbox(
-                            "", ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"],
-                            index=0 if not fila.get(f"Variable_{p}") else ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"].index(fila[f"Variable_{p}"]),
-                            key=f"var{p}_{i}_{idx}", label_visibility="collapsed"
+                key_seccion = f"{dia_key}_{seccion.replace(' ', '_')}"
+                if key_seccion not in st.session_state:
+                    st.session_state[key_seccion] = [{k: "" for k in columnas_tabla} for _ in range(6)]
+                    for f in st.session_state[key_seccion]:
+                        f["Sección"] = seccion
+
+                for idx, fila in enumerate(st.session_state[key_seccion]):
+                    # ✅ Título + checkbox a la derecha
+                    cols_titulo = st.columns([9, 1, 1])
+                    with cols_titulo[0]:
+                        st.markdown(f"#### Ejercicio {idx + 1} - {fila.get('Ejercicio', '')}")
+                   # with cols_titulo[1]:
+                        #st.markdown("<div style='text-align: right; padding-top: 6px;'>Progresiones</div>", unsafe_allow_html=True)
+                   # with cols_titulo[2]:
+                        #mostrar_progresion = st.checkbox(" ", key=f"mostrar_prog_{i}_{seccion}_{idx}", label_visibility="collapsed")
+
+                    # === Inputs principales ===
+                    cols = st.columns(11)
+
+                    # ✅ Clave única segura para evitar conflicto
+                    key_entrenamiento = f"{i}_{seccion.replace(' ', '_')}_{idx}"
+
+                    fila["Circuito"] = cols[0].selectbox(
+                        "", ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"],
+                        index=["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"].index(fila["Circuito"]) if fila["Circuito"] else 0,
+                        key=f"circ_{key_entrenamiento}", label_visibility="collapsed"
+                    )
+
+                    fila["Ejercicio"] = cols[1].text_input(
+                        "", value=fila["Ejercicio"],
+                        key=f"ej_{key_entrenamiento}", label_visibility="collapsed", placeholder="Ejercicio"
+                    )
+
+                    fila["Series"] = cols[2].text_input(
+                        "", value=fila["Series"],
+                        key=f"ser_{key_entrenamiento}", label_visibility="collapsed", placeholder="Series"
+                    )
+
+                    fila["Peso"] = cols[3].text_input(
+                        "", value=fila["Peso"],
+                        key=f"peso_{key_entrenamiento}", label_visibility="collapsed", placeholder="Kg"
+                    )
+
+                    fila["RIR"] = cols[4].text_input(
+                        "", value=fila["RIR"],
+                        key=f"rir_{key_entrenamiento}", label_visibility="collapsed", placeholder="RIR"
+                    )
+
+                    # ✅ Selector de variable extra en misma fila
+                    variables_extra = ["", "Tiempo", "Velocidad", "Repeticiones", "Series"]
+                    fila["VariableExtra"] = cols[5].selectbox(
+                        "", options=variables_extra,
+                        index=variables_extra.index(fila.get("VariableExtra", "")),
+                        key=f"extra_{key_entrenamiento}",
+                        label_visibility="collapsed"
+                    )
+
+                    # === Inputs dinámicos según variable extra seleccionada ===
+
+                    fila["Repeticiones"] = cols[6].text_input(
+                        "", value=fila["Repeticiones"],
+                        key=f"rep_{key_entrenamiento}",
+                        label_visibility="collapsed", placeholder="Reps"
+                    ) if fila.get("VariableExtra") == "Repeticiones" else fila.get("Repeticiones", "")
+
+                    fila["Tiempo"] = cols[7].text_input(
+                        "", value=fila["Tiempo"],
+                        key=f"tiempo_{key_entrenamiento}",
+                        label_visibility="collapsed", placeholder="Seg"
+                    ) if fila.get("VariableExtra") == "Tiempo" else fila.get("Tiempo", "")
+
+                    fila["Velocidad"] = cols[8].text_input(
+                        "", value=fila["Velocidad"],
+                        key=f"vel_{key_entrenamiento}",
+                        label_visibility="collapsed", placeholder="Vel"
+                    ) if fila.get("VariableExtra") == "Velocidad" else fila.get("Velocidad", "")
+
+                    # Ocultar tipo pero mantenerlo en estructura
+                    fila["Tipo"] = fila.get("Tipo", "")
+
+                    # ✅ Mostrar checkboxes en la misma fila
+                    # ✅ Fila con checkboxes alineados a la derecha
+                    cbox_cols = st.columns([6, 1, 1])  # espacio vacío + 2 columnas para checkboxes
+
+                    with cbox_cols[1]:
+                        mostrar_video = st.checkbox("Link de video", key=f"video_check_{key_entrenamiento}")
+
+                    with cbox_cols[2]:
+                        mostrar_progresion = st.checkbox("Progresiones", key=f"mostrar_prog_{key_entrenamiento}")
+
+                    # === VIDEO ===
+                    if mostrar_video:
+                        fila["Video"] = st.text_input(
+                            "Link de video (opcional)", value=fila.get("Video", ""),
+                            key=f"video_input_{key_entrenamiento}"
                         )
-                        fila[f"Cantidad_{p}"] = cols[12].text_input("", value=fila.get(f"Cantidad_{p}", ""), key=f"cant{p}_{i}_{idx}", label_visibility="collapsed", placeholder=f"Cant{p}")
-                        fila[f"Operacion_{p}"] = cols[13].selectbox("", ["", "multiplicacion", "division", "suma", "resta"],
-                            index=0 if not fila.get(f"Operacion_{p}") else ["", "multiplicacion", "division", "suma", "resta"].index(fila[f"Operacion_{p}"]),
-                            key=f"ope{p}_{i}_{idx}", label_visibility="collapsed")
-                        fila[f"Semanas_{p}"] = cols[14].text_input("", value=fila.get(f"Semanas_{p}", ""), key=f"sem{p}_{i}_{idx}", label_visibility="collapsed", placeholder=f"Sem{p}")
+                    else:
+                        fila["Video"] = fila.get("Video", "")
+
+                    # === PROGRESIONES ===
+                    if mostrar_progresion:
+                        st.markdown("#### Progresiones activas")
+                        pcols = st.columns(4)
+                        for p in range(1, 4):
+                            if progresion_activa == f"Progresión {p}":
+                                fila[f"Variable_{p}"] = pcols[0].selectbox(
+                                    f"Variable {p}", ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"],
+                                    index=0 if not fila.get(f"Variable_{p}") else ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"].index(fila[f"Variable_{p}"]),
+                                    key=f"var{p}_{key_entrenamiento}"
+                                )
+                                fila[f"Cantidad_{p}"] = pcols[1].text_input(
+                                    f"Cantidad {p}", value=fila.get(f"Cantidad_{p}", ""), key=f"cant{p}_{key_entrenamiento}"
+                                )
+                                fila[f"Operacion_{p}"] = pcols[2].selectbox(
+                                    f"Operación {p}", ["", "multiplicacion", "division", "suma", "resta"],
+                                    index=0 if not fila.get(f"Operacion_{p}") else ["", "multiplicacion", "division", "suma", "resta"].index(fila[f"Operacion_{p}"]),
+                                    key=f"ope{p}_{key_entrenamiento}"
+                                )
+                                fila[f"Semanas_{p}"] = pcols[3].text_input(
+                                    f"Semanas {p}", value=fila.get(f"Semanas_{p}", ""), key=f"sem{p}_{key_entrenamiento}"
+                                )
+                    else:
+                        for p in range(1, 4):
+                            fila[f"Variable_{p}"] = fila.get(f"Variable_{p}", "")
+                            fila[f"Cantidad_{p}"] = fila.get(f"Cantidad_{p}", "")
+                            fila[f"Operacion_{p}"] = fila.get(f"Operacion_{p}", "")
+                            fila[f"Semanas_{p}"] = fila.get(f"Semanas_{p}", "")
 
     st.markdown("---")
 
