@@ -79,7 +79,7 @@ def crear_rutinas():
                         #mostrar_progresion = st.checkbox(" ", key=f"mostrar_prog_{i}_{seccion}_{idx}", label_visibility="collapsed")
 
                     # === Inputs principales ===
-                    cols = st.columns(11)
+                    cols = st.columns(12)
 
                     # ✅ Clave única segura para evitar conflicto
                     key_entrenamiento = f"{i}_{seccion.replace(' ', '_')}_{idx}"
@@ -100,32 +100,28 @@ def crear_rutinas():
                         key=f"ser_{key_entrenamiento}", label_visibility="collapsed", placeholder="Series"
                     )
 
-                    fila["Peso"] = cols[3].text_input(
+                    fila["Repeticiones"] = cols[3].text_input(
+                        "", value=fila.get("Repeticiones", ""),
+                        key=f"rep_{key_entrenamiento}", label_visibility="collapsed", placeholder="Reps"
+                    )
+
+                    fila["Peso"] = cols[4].text_input(
                         "", value=fila["Peso"],
                         key=f"peso_{key_entrenamiento}", label_visibility="collapsed", placeholder="Kg"
                     )
 
-                    fila["RIR"] = cols[4].text_input(
+                    fila["RIR"] = cols[5].text_input(
                         "", value=fila["RIR"],
                         key=f"rir_{key_entrenamiento}", label_visibility="collapsed", placeholder="RIR"
                     )
 
-                    # ✅ Selector de variable extra en misma fila
-                    variables_extra = ["", "Tiempo", "Velocidad", "Repeticiones", "Series"]
-                    fila["VariableExtra"] = cols[5].selectbox(
+                    variables_extra = ["", "Tiempo", "Velocidad", "Series"]
+                    fila["VariableExtra"] = cols[6].selectbox(
                         "", options=variables_extra,
                         index=variables_extra.index(fila.get("VariableExtra", "")),
                         key=f"extra_{key_entrenamiento}",
                         label_visibility="collapsed"
                     )
-
-                    # === Inputs dinámicos según variable extra seleccionada ===
-
-                    fila["Repeticiones"] = cols[6].text_input(
-                        "", value=fila["Repeticiones"],
-                        key=f"rep_{key_entrenamiento}",
-                        label_visibility="collapsed", placeholder="Reps"
-                    ) if fila.get("VariableExtra") == "Repeticiones" else fila.get("Repeticiones", "")
 
                     fila["Tiempo"] = cols[7].text_input(
                         "", value=fila["Tiempo"],
