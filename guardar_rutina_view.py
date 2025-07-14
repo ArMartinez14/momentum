@@ -84,6 +84,23 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias):
             # === GUARDAR SOLO SI TIENE DÍAS ===
             if rutina_semana["rutina"]:
                 doc_id = f"{correo_norm}_{fecha_norm}"
+                
+                # ⬇️ Aquí pegas esto
+                st.write("🌐 Proyecto Firebase conectado:")
+                st.write(db._client.project)
+                st.write("🔄 Ejecutando guardar_rutina para:")
+                st.write(f"➡️ Cliente: {nombre_sel}")
+                st.write(f"➡️ Correo: {correo}")
+                st.write(f"➡️ Entrenador: {entrenador}")
+                st.write(f"➡️ Fecha inicio: {fecha_inicio}")
+                st.write(f"➡️ Semanas: {semanas}")
+                st.write("📦 Estructura rutina:")
+                st.write(rutina_semana)
+                st.write(f"📁 Guardando en colección: rutinas_semanales / ID: {doc_id}")
+
+                # Guardar en Firestore
+                db.collection("rutinas_semanales").document(doc_id).set(rutina_semana)
+
                 db.collection("rutinas_semanales").document(doc_id).set(rutina_semana)
 
         st.success(f"✅ Rutina generada correctamente para {semanas} semanas.")
