@@ -157,21 +157,23 @@ def ver_rutinas():
                 st.error(f"⚠️ Error buscando valores alcanzados previos: {err}")
 
 
-            # === Armar partes
-            reps_min = e.get("RepsMin", "")
-            reps_max = e.get("RepsMax", "")
+            # === Mostrar repeticiones en formato mínimo-máximo ===
+            reps_min = e.get("reps_min", "")
+            reps_max = e.get("reps_max", "")
+            series = e.get("series", "")
 
-            if reps_min and reps_max:
-                rep_str = f"{series}x{reps_min}-{reps_max}"
+            # Asegurarse que todo sea string (por seguridad en join/display)
+            rep_min_str = str(reps_min) if reps_min != "" else ""
+            rep_max_str = str(reps_max) if reps_max != "" else ""
+
+            if rep_min_str and rep_max_str:
+                rep_str = f"{series}x {rep_min_str} a {rep_max_str}"
+            elif rep_min_str:
+                rep_str = f"{series}x{rep_min_str}+"
+            elif rep_max_str:
+                rep_str = f"{series}x≤{rep_max_str}"
             else:
-                rep_str = f"{series}x{reps}"
-
-            if reps_alcanzadas is not None:
-                try:
-                    rep_str += f"({int(reps_alcanzadas)})"
-                except:
-                    pass
-
+                rep_str = f"{series}x"
 
             rir_str = f"RIR {rir}"
             if rir_alcanzado is not None:
