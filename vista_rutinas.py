@@ -116,30 +116,194 @@ def ver_rutinas():
         st.markdown("<div class='bloque'>", unsafe_allow_html=True)
 
         for idx, e in enumerate(lista):
+            # === Inicio del bucle de ejercicios
             ejercicio = e.get("ejercicio", f"Ejercicio {idx+1}")
             series = e.get("series", "")
             reps = e.get("repeticiones", "")
             peso = e.get("peso", "")
             ejercicio_id = f"{circuito}_{ejercicio}_{idx}".lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "")
 
+            peso_str = f"{peso}kg" if peso else ""
+            tiempo = e.get("tiempo", "")
+            tiempo_str = f"{tiempo} seg" if tiempo else ""
+            rir = e.get("rir", "")
+            rir_str = f"RIR {rir}" if rir else ""
+
+            # === Buscar datos alcanzados de la semana anterior (para mostrarlos esta semana)
+            reps_alcanzadas = None
+            rir_alcanzado = None
+
+            try:
+                idx_actual = semanas.index(semana_sel)
+                if idx_actual + 1 < len(semanas):
+                    semana_anterior = semanas[idx_actual + 1]
+                    doc_ant = next((r for r in rutinas_cliente if r["fecha_lunes"] == semana_anterior), None)
+                    if doc_ant:
+                        ejercicios_prev = doc_ant.get("rutina", {}).get(str(dia_sel), [])
+                        nombre_actual = e.get("ejercicio", "").strip().lower()
+                        circuito_actual = e.get("circuito", "").strip().lower()
+                        match_prev = next(
+                            (
+                                ex for ex in ejercicios_prev
+                                if ex.get("ejercicio", "").strip().lower() == nombre_actual and
+                                ex.get("circuito", "").strip().lower() == circuito_actual
+                            ),
+                            None
+                        )
+                        if match_prev:
+                            reps_alcanzadas = match_prev.get("reps_alcanzadas")
+                            rir_alcanzado = match_prev.get("rir_alcanzado")
+            except Exception as err:
+                st.error(f"⚠️ Error buscando valores alcanzados previos: {err}")
+
+
+            # === Armar partes
+            reps_min = e.get("RepsMin", "")
+            reps_max = e.get("RepsMax", "")
+
+            if reps_min and reps_max:
+                rep_str = f"{series}x{reps_min}-{reps_max}"
+            else:
+                rep_str = f"{series}x{reps}"
+
+            if reps_alcanzadas is not None:
+                try:
+                    rep_str += f"({int(reps_alcanzadas)})"
+                except:
+                    pass
+
+
+            rir_str = f"RIR {rir}"
+            if rir_alcanzado is not None:
+                try:
+                    rir_str += f"({int(rir_alcanzado)})"
+                except:
+                    pass
+
+
+            info_partes = [rep_str]
+            if peso_str:
+                info_partes.append(peso_str)
+            if tiempo_str:
+                info_partes.append(tiempo_str)
+            if rir_str:
+                info_partes.append(rir_str)
+
+
+            info_str = " · ".join(info_partes)
+
             st.markdown(
-                f"<div class='ejercicio'>{ejercicio} &nbsp; <span style='font-size:16px; font-weight:normal;'>{series}x{reps} · {peso}kg</span></div>",
+                f"<div class='ejercicio'>{ejercicio} &nbsp; <span style='font-size:16px; font-weight:normal;'>{info_str}</span></div>",
                 unsafe_allow_html=True
             )
 
-            if st.checkbox(f"Editar ejercicio {idx+1}", key=f"edit_{circuito}_{idx}"):
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    e["peso_alcanzado"] = st.text_input("", value=e.get("peso_alcanzado", ""), placeholder="Peso", key=f"peso_{ejercicio_id}", label_visibility="collapsed")
-                    e["comentario"] = st.text_input("", value=e.get("comentario", ""), placeholder="Comentario", key=f"coment_{ejercicio_id}", label_visibility="collapsed")
-                with col2:
-                    e["rir"] = st.text_input("", value=e.get("rir", ""), placeholder="RIR", key=f"rir_{ejercicio_id}", label_visibility="collapsed")
+            col1, col2 = st.columns([1, 1.2])
+            editar = col1.checkbox(f"Editar ejercicio {idx+1}", key=f"edit_{circuito}_{idx}")
+            ver_sesion_ant = col2.checkbox("📂 Sesión anterior", key=f"prev_{circuito}_{idx}")
+
+            match_ant = None  # se usa si copiamos luego
+
+            # === Mostrar sesión anterior aunque NO se edite
+            if ver_sesion_ant:
+                try:
+                    idx_semana_actual = semanas.index(semana_sel)
+                    if idx_semana_actual + 1 < len(semanas):
+                        semana_ant = semanas[idx_semana_actual + 1]
+                        #st.info(f"🔍 Buscando en semana anterior: `{semana_ant}`")
+
+                        doc_ant = next((r for r in rutinas_cliente if r["fecha_lunes"] == semana_ant), None)
+
+                        if doc_ant:
+                            rutina_ant = doc_ant.get("rutina", {})
+                            ejercicios_ant = rutina_ant.get(str(dia_sel), [])
+
+                            nombre_actual = e.get("ejercicio", "").strip().lower()
+                            circuito_actual = e.get("circuito", "").strip().lower()
+
+                            match_ant = next(
+                                (
+                                    ex for ex in ejercicios_ant
+                                    if ex.get("ejercicio", "").strip().lower() == nombre_actual and
+                                    ex.get("circuito", "").strip().lower() == circuito_actual
+                                ),
+                                None
+                            )
+
+                            if match_ant and isinstance(match_ant.get("series_data", []), list):
+                                if ver_sesion_ant:
+                                    st.markdown("📌 <b>Datos de la sesión anterior:</b>", unsafe_allow_html=True)
+                                    for s_idx, serie_ant in enumerate(match_ant["series_data"]):
+                                        reps = serie_ant.get("reps", "-") or "-"
+                                        peso = serie_ant.get("peso", "-") or "-"
+                                        rir = serie_ant.get("rir", "-") or "-"
+                                        st.markdown(
+                                            f"<div style='font-size:16px; padding-left:10px;'>"
+                                            f" <b>Serie {s_idx+1}:</b> {reps}x{peso}kg · RIR {rir}"
+                                            f"</div>",
+                                            unsafe_allow_html=True
+                                        )
+                            
+                            else:
+                                st.warning("⚠️ No se encontró ejercicio coincidente.")
+                        else:
+                            st.warning("⚠️ No se encontró documento de semana anterior.")
+                    else:
+                        st.info("ℹ️ Esta es la semana más antigua disponible.")
+                except Exception as err:
+                    st.error(f"❌ Error buscando datos anteriores: {err}")
+
+            # === Edición del ejercicio (solo si está activo)
+            if editar:
+                try:
+                    num_series = int(e.get("series", 0))
+                except:
+                    num_series = 0
+
+                if "series_data" not in e or not isinstance(e["series_data"], list) or len(e["series_data"]) != num_series:
+                    e["series_data"] = [{"reps": "", "peso": "", "rir": ""} for _ in range(num_series)]
+
+                for s_idx in range(num_series):
+                    st.markdown(f"**Serie {s_idx + 1}**")
+                    s_cols = st.columns(3)
+
+                    e["series_data"][s_idx]["reps"] = s_cols[0].text_input(
+                        "Reps", value=e["series_data"][s_idx].get("reps", ""),
+                        placeholder="Reps", key=f"rep_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
+                    )
+
+                    e["series_data"][s_idx]["peso"] = s_cols[1].text_input(
+                        "Peso", value=e["series_data"][s_idx].get("peso", ""),
+                        placeholder="Kg", key=f"peso_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
+                    )
+
+                    e["series_data"][s_idx]["rir"] = s_cols[2].text_input(
+                        "RIR", value=e["series_data"][s_idx].get("rir", ""),
+                        placeholder="RIR", key=f"rir_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
+                    )
+
+                e["comentario"] = st.text_input(
+                    "Comentario general", value=e.get("comentario", ""),
+                    placeholder="Comentario", key=f"coment_{ejercicio_id}"
+                )
 
             if e.get("video"):
                 st.video(e["video"])
 
+
+
         st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("<div class='linea-blanca'></div>", unsafe_allow_html=True)
+
+    # === RPE DE LA SESIÓN ===
+    rpe_key = f"rpe_sesion_{semana_sel}_{dia_sel}"
+    valor_rpe_inicial = rutina_doc["rutina"].get(dia_sel + "_rpe", "")
+
+    st.markdown("### 📌 RPE de la sesión")
+    rpe_valor = st.number_input(
+    "RPE percibido del día (0-10)", min_value=0.0, max_value=10.0, step=0.5,
+    value=float(valor_rpe_inicial) if valor_rpe_inicial != "" else 0.0,
+    key=rpe_key
+)
 
     # ✅ GUARDAR CAMBIOS
     if st.button("💾 Guardar cambios del día", key=f"guardar_{dia_sel}_{semana_sel}"):
@@ -150,77 +314,132 @@ def ver_rutinas():
         st.write(f"📌 Documento base: `{doc_id}`")
 
         try:
-            st.write(f"📝 Guardando cambios en `{doc_id}` campo `rutina.{dia_sel}`...")
-            db.collection("rutinas_semanales").document(doc_id).update({
-                f"rutina.{dia_sel}": ejercicios
-            })
-            st.success(f"✅ Día `{dia_sel}` guardado correctamente en `{doc_id}`.")
-
             semanas_futuras = sorted([s for s in semanas if s > semana_sel])
             st.write(f"📅 Semanas futuras encontradas: {semanas_futuras}")
 
             for idx, e in enumerate(ejercicios):
-                if e.get("peso_alcanzado"):
-                    st.write(f"➡️ [{idx}] Ejercicio: `{e['ejercicio']}`")
-                    st.write(f"   🔑 Variables:")
-                    st.write(f"   - peso_actual: {e.get('peso', 0)}")
-                    st.write(f"   - peso_alcanzado: {e['peso_alcanzado']}")
+                series_data = e.get("series_data", [])
 
-                    st.write(f"   🔄 Llamando `actualizar_progresiones_individual()` ...")
-                    actualizar_progresiones_individual(
-                        nombre=rutina_doc.get("cliente", ""),
-                        correo=correo_cliente,  # ✅ ahora usa el correo correcto
-                        ejercicio=e["ejercicio"],
-                        circuito=e.get("circuito", ""),
-                        bloque=e.get("bloque", e.get("seccion", "")),
-                        fecha_actual_lunes=semana_sel,
-                        dia_numero=int(dia_sel),
-                        peso_alcanzado=float(e["peso_alcanzado"])
-                    )
-                    st.write("   ✅ Progresión individual actualizada.")
+                pesos, reps, rirs = [], [], []
 
-                    peso_alcanzado = float(e["peso_alcanzado"])
-                    peso_actual = float(e.get("peso", 0))
-                    delta = peso_alcanzado - peso_actual
-                    st.write(f"   📐 Delta = {peso_alcanzado} - {peso_actual} = {delta}")
+                for s_idx, s in enumerate(series_data):
+                    peso_raw = s.get("peso", "").strip()
+                    reps_raw = s.get("reps", "").strip()
+                    rir_raw = s.get("rir", "").strip()
 
-                    if delta == 0:
-                        st.write("   ⚠️ Delta = 0 ➜ No se aplican cambios a semanas futuras.")
-                        continue
+                    try:
+                        if peso_raw.replace(",", ".").replace("kg", "").strip() != "":
+                            peso_val = float(peso_raw.replace(",", ".").replace("kg", "").strip())
+                            pesos.append(peso_val)
+                    except Exception as err:
+                        st.write(f"❌ Error en peso serie {s_idx+1}: {peso_raw} ➜ {err}")
 
-                    nombre_ejercicio = e["ejercicio"]
-                    circuito = e.get("circuito", "")
-                    bloque = e.get("bloque", e.get("seccion", ""))
-                    peso_base = peso_actual
+                    try:
+                        if reps_raw.isdigit():
+                            reps_val = int(reps_raw)
+                            reps.append(reps_val)
+                    except Exception as err:
+                        st.write(f"❌ Error en reps serie {s_idx+1}: {reps_raw} ➜ {err}")
 
-                    for s in semanas_futuras:
-                        peso_base += delta
-                        fecha_norm_fut = s.replace("-", "_")
-                        doc_id_fut = f"{correo_cliente_norm}_{fecha_norm_fut}"
-                        st.write(f"   📌 Semana `{s}` ➜ Documento `{doc_id_fut}` ➜ Nuevo peso base: {peso_base}")
+                    try:
+                        if rir_raw.replace(",", ".") != "":
+                            rir_val = float(rir_raw.replace(",", "."))
+                            rirs.append(rir_val)
+                    except Exception as err:
+                        st.write(f"❌ Error en RIR serie {s_idx+1}: {rir_raw} ➜ {err}")
 
-                        doc_ref = db.collection("rutinas_semanales").document(doc_id_fut)
-                        doc = doc_ref.get()
+                peso_alcanzado = max(pesos) if pesos else None
+                reps_alcanzadas = max(reps) if reps else None
+                rir_alcanzado = min(rirs) if rirs else None
 
-                        if doc.exists:
-                            rutina_fut = doc.to_dict().get("rutina", {})
-                            ejercicios_fut = rutina_fut.get(dia_sel, [])
+                if peso_alcanzado is not None:
+                    e["peso_alcanzado"] = peso_alcanzado
+                if reps_alcanzadas is not None:
+                    e["reps_alcanzadas"] = reps_alcanzadas
+                if rir_alcanzado is not None:
+                    e["rir_alcanzado"] = rir_alcanzado
+                # Detectar si el coach editó algo
+                comentario = e.get("comentario", "").strip()
+                hay_input = bool(pesos or reps or rirs or comentario)
 
-                            for ef in ejercicios_fut:
-                                if (
-                                    ef.get("ejercicio") == nombre_ejercicio and
-                                    ef.get("circuito") == circuito and
-                                    (ef.get("bloque") == bloque or ef.get("seccion") == bloque)
-                                ):
-                                    ef["peso"] = round(peso_base, 2)
-                                    st.write(f"      ✔️ `{ef['ejercicio']}` actualizado a {ef['peso']}kg")
+                if hay_input:
+                    e["coach_responsable"] = correo_raw
+                    st.write(f"   🧑‍🏫 Coach responsable: {correo_raw}")
 
-                            doc_ref.update({f"rutina.{dia_sel}": ejercicios_fut})
-                            st.write(f"   🔄 Documento `{doc_id_fut}` actualizado con éxito.")
-                        else:
-                            st.warning(f"⚠️ Documento `{doc_id_fut}` no existe ➜ Se omite.")
+                st.write(f"➡️ [{idx}] Ejercicio: `{e['ejercicio']}`")
+                st.write(f"   🔑 Variables:")
+                st.write(f"   - peso_actual: {e.get('peso', 0)}")
+                st.write(f"   - peso_alcanzado: {peso_alcanzado}")
+                st.write(f"   - reps_alcanzadas: {reps_alcanzadas}")
+                st.write(f"   - rir_alcanzado: {rir_alcanzado}")
 
-            st.success("✅ TODOS LOS PASOS EJECUTADOS SIN ERRORES")
+                if peso_alcanzado is None:
+                    st.warning("   ⚠️ No hay peso válido para este ejercicio. Se omite.")
+                    continue
+
+                st.write(f"   🔄 Llamando `actualizar_progresiones_individual()` ...")
+                actualizar_progresiones_individual(
+                    nombre=rutina_doc.get("cliente", ""),
+                    correo=correo_cliente,
+                    ejercicio=e["ejercicio"],
+                    circuito=e.get("circuito", ""),
+                    bloque=e.get("bloque", e.get("seccion", "")),
+                    fecha_actual_lunes=semana_sel,
+                    dia_numero=int(dia_sel),
+                    peso_alcanzado=peso_alcanzado
+                )
+                st.write("   ✅ Progresión individual actualizada.")
+
+                peso_actual = float(e.get("peso", 0))
+                delta = peso_alcanzado - peso_actual
+                st.write(f"   📐 Delta = {peso_alcanzado} - {peso_actual} = {delta}")
+
+                if delta == 0:
+                    st.write("   ⚠️ Delta = 0 ➜ No se aplican cambios a semanas futuras.")
+                    continue
+
+                nombre_ejercicio = e["ejercicio"]
+                circuito = e.get("circuito", "")
+                bloque = e.get("bloque", e.get("seccion", ""))
+                peso_base = peso_actual
+
+                for s in semanas_futuras:
+                    fecha_norm_fut = s.replace("-", "_")
+                    doc_id_fut = f"{correo_cliente_norm}_{fecha_norm_fut}"
+                    st.write(f"   📌 Semana `{s}` ➜ Documento `{doc_id_fut}` ➜ Aplicar delta de {delta}kg")
+
+                    doc_ref = db.collection("rutinas_semanales").document(doc_id_fut)
+                    doc = doc_ref.get()
+
+                    if doc.exists:
+                        rutina_fut = doc.to_dict().get("rutina", {})
+                        ejercicios_fut = rutina_fut.get(dia_sel, [])
+
+                        for ef in ejercicios_fut:
+                            if (
+                                ef.get("ejercicio") == nombre_ejercicio and
+                                ef.get("circuito") == circuito and
+                                (ef.get("bloque") == bloque or ef.get("seccion") == bloque)
+                            ):
+                                peso_futuro_original = float(ef.get("peso", 0))
+                                nuevo_peso = round(peso_futuro_original + delta, 2)
+                                ef["peso"] = nuevo_peso
+                                st.write(f"      ✔️ `{ef['ejercicio']}`: {peso_futuro_original} + {delta} = {nuevo_peso}kg")
+
+                        # ✅ Actualizar solo el día específico
+                        doc_ref.update({f"rutina.{dia_sel}": ejercicios_fut})
+                        st.write(f"   🔄 Documento `{doc_id_fut}` actualizado con éxito.")
+                    else:
+                        st.warning(f"⚠️ Documento `{doc_id_fut}` no existe ➜ Se omite.")
+
+            # ✅ Paso final: guardar nuevamente ejercicios actualizados en la semana actual
+            # ✅ Guardar ejercicios y RPE
+            db.collection("rutinas_semanales").document(doc_id).update({
+                f"rutina.{dia_sel}": ejercicios,
+                f"rutina.{dia_sel}_rpe": rpe_valor
+            })
+
+            st.success(f"✅ TODOS LOS CAMBIOS guardados correctamente en `{doc_id}`.")
 
         except Exception as e:
             st.error("❌ Error durante el guardado paso a paso.")
