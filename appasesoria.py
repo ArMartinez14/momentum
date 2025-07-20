@@ -7,12 +7,12 @@ from vista_rutinas import ver_rutinas
 from borrar_rutinas import borrar_rutinas
 from ingresar_cliente_view import ingresar_cliente_o_video
 from crear_planificaciones import crear_rutinas
-import editar_rutinas
+
 import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app
 import json   # 👈 importante para leer el secreto
 
-# === INICIALIZAR FIREBASE desde Secrets ===
+# === INICIALIZAR ###FIREBASE desde Secrets ===
 if not firebase_admin._apps:
     # Lee el secreto como cadena JSON y convierte a dict
     cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
@@ -83,4 +83,4 @@ elif opcion == "Borrar Rutinas":
 elif opcion == "Crear Rutinas":
     crear_rutinas()
 elif opcion == "Editar Rutinas":
-    editar_rutinas.editar_rutinas()
+    st.write("Aquí iría el módulo de editar rutinas.")
