@@ -37,8 +37,17 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias):
                         ejercicio_mod = ejercicio.copy()
 
                         # === APLICAR PROGRESIONES ===
-                        for variable_objetivo in ["peso", "repeticiones", "rir", "tiempo", "velocidad"]:
-                            valor_original = ejercicio.get(variable_objetivo, "")
+                        # Diccionario para mapear nombre interno a nombre real en los datos
+                        campos_progresion = {
+                            "peso": "Peso",
+                            "repeticiones": "Repeticiones",
+                            "rir": "RIR",
+                            "tiempo": "Tiempo",
+                            "velocidad": "Velocidad"
+                        }
+
+                        for var_interna, var_real in campos_progresion.items():
+                            valor_original = ejercicio.get(var_real, "")
                             if not valor_original:
                                 continue
 
@@ -50,7 +59,7 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias):
                                 operacion = ejercicio.get(f"Operacion_{p}", "").strip().lower()
                                 semanas_txt = ejercicio.get(f"Semanas_{p}", "")
 
-                                if var != variable_objetivo or not cantidad or not operacion:
+                                if var != var_interna or not cantidad or not operacion:
                                     continue
 
                                 try:
@@ -62,7 +71,7 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias):
                                     if s in semanas_aplicar:
                                         valor_actual = aplicar_progresion(valor_actual, float(cantidad), operacion)
 
-                            ejercicio_mod[variable_objetivo] = valor_actual
+                            ejercicio_mod[var_real] = valor_actual
 
                         lista_ejercicios.append({
                             "bloque": ejercicio_mod.get("Sección", seccion),
@@ -84,20 +93,6 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias):
             # === GUARDAR SOLO SI TIENE DÍAS ===
             if rutina_semana["rutina"]:
                 doc_id = f"{correo_norm}_{fecha_norm}"
-
-                # Debug limpio y seguro
-                st.write("🌐 Proyecto Firebase conectado:")
-                st.write("Firestore conectado:", type(db))
-
-                st.write("🔄 Ejecutando guardar_rutina para:")
-                st.write(f"➡️ Cliente: {nombre_sel}")
-                st.write(f"➡️ Correo: {correo}")
-                st.write(f"➡️ Entrenador: {entrenador}")
-                st.write(f"➡️ Fecha inicio: {fecha_inicio}")
-                st.write(f"➡️ Semanas: {semanas}")
-                st.write("📦 Estructura rutina:")
-                st.write(rutina_semana)
-                st.write(f"📁 Guardando en colección: rutinas_semanales / ID: {doc_id}")
 
                 db.collection("rutinas_semanales").document(doc_id).set(rutina_semana)
 
