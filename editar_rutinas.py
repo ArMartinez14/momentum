@@ -1,10 +1,10 @@
 import streamlit as st
-import firebase_admin
 from firebase_admin import credentials, firestore
-import unicodedata
+from datetime import datetime
+import firebase_admin
 import json
 
-# === INICIALIZAR FIREBASE SOLO UNA VEZ ===
+# === INICIALIZAR FIREBASE ===
 if not firebase_admin._apps:
     cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
     cred = credentials.Certificate(cred_dict)
@@ -12,94 +12,116 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
-def normalizar_id(correo):
-    return correo.replace('@', '_').replace('.', '_')
+def editar_rutinas():
+    st.title("✏️ Editar Rutina y Aplicar Cambios a Futuras Semanas")
 
-def normalizar_texto(texto):
-    return unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('utf-8').lower().replace(" ", "_")
+    # === Buscar clientes desde la colección ===
+    docs = db.collection("rutinas_semanales").stream()
+    clientes_dict = {}
+    for doc in docs:
+        data = doc.to_dict()
+        nombre = data.get("cliente")
+        correo = data.get("correo")
+        if nombre and correo:
+            clientes_dict[nombre] = correo
 
-def ingresar_cliente_o_video_o_ejercicio():
-    st.title("Panel de Administración")
+    nombres_clientes = sorted(clientes_dict.keys())
+    nombre_sel = st.selectbox("Selecciona el cliente:", nombres_clientes)
+    if not nombre_sel:
+        return
 
-    opcion = st.selectbox(
-        "¿Qué deseas hacer?",
-        ["Selecciona...", "Cliente Nuevo", "Video de Ejercicio", "Ejercicio Nuevo o Editar"],
-        index=0
-    )
+    correo = clientes_dict[nombre_sel]
 
-    # ================= CLIENTE NUEVO =================
-    if opcion == "Cliente Nuevo":
-        nombre = st.text_input("Nombre del cliente:")
-        correo = st.text_input("Correo del cliente:")
-        rol = st.selectbox("Rol:", ["deportista", "entrenador", "admin"])
 
-        if st.button("Guardar Cliente"):
-            if nombre and correo and rol:
-                doc_id = normalizar_id(correo)
-                data = {"nombre": nombre, "correo": correo, "rol": rol}
-                try:
-                    db.collection("usuarios").document(doc_id).set(data)
-                    st.success(f"✅ Cliente '{nombre}' guardado correctamente")
-                except Exception as e:
-                    st.error(f"❌ Error al guardar: {e}")
-            else:
-                st.warning("⚠️ Completa todos los campos.")
+    # === Obtener semanas disponibles ===
+    docs = db.collection("rutinas_semanales") \
+        .where("correo", "==", correo) \
+        .stream()
 
-    # ================= EJERCICIO NUEVO O EDITAR =================
-    elif opcion == "Ejercicio Nuevo o Editar":
-        st.subheader("📌 Crear o Editar Ejercicio")
+    semanas_dict = {}
+    for doc in docs:
+        data = doc.to_dict()
+        fecha_lunes = data.get("fecha_lunes")
+        if fecha_lunes:
+            semanas_dict[fecha_lunes] = doc.id
 
-        # Cargar ejercicios ya existentes
-        docs = db.collection("ejercicios").stream()
-        ejercicios_disponibles = {doc.id: doc.to_dict().get("nombre", doc.id) for doc in docs}
+    semanas = sorted(semanas_dict.keys())
+    semana_sel = st.selectbox("Selecciona la semana a editar:", semanas)
+    if not semana_sel:
+        return
 
-        modo = st.radio("¿Qué quieres hacer?", ["Nuevo ejercicio", "Editar ejercicio existente"])
+    doc_id_semana = semanas_dict[semana_sel]
+    doc_data = db.collection("rutinas_semanales").document(doc_id_semana).get().to_dict()
+    rutina = doc_data.get("rutina", {})
 
-        if modo == "Editar ejercicio existente":
-            seleccion = st.selectbox("Selecciona un ejercicio:", list(ejercicios_disponibles.values()))
-            doc_id = [k for k, v in ejercicios_disponibles.items() if v == seleccion][0]
-            doc_ref = db.collection("ejercicios").document(doc_id).get()
-            datos = doc_ref.to_dict() if doc_ref.exists else {}
-        else:
-            datos = {}
+    dias_disponibles = sorted(rutina.keys(), key=lambda x: int(x))
+    dia_sel = st.selectbox("Selecciona el día a editar:", dias_disponibles, format_func=lambda x: f"Día {x}")
+    if not dia_sel:
+        return
 
-        # === FORMULARIO ORDENADO Y CON AUTO-NOMBRE ===
-        col1, col2 = st.columns(2)
-        with col1:
-            implemento = st.text_input("Implemento:", value=datos.get("implemento", ""), key="implemento")
-        with col2:
-            detalle = st.text_input("Detalle:", value=datos.get("detalle", ""), key="detalle")
+    # === Obtener todos los bloques únicos en ese día ===
+    ejercicios_dia = rutina.get(dia_sel, {})
+    bloques_disponibles = list(set(ej.get("bloque", "") for ej in ejercicios_dia))
+    bloque_sel = st.selectbox("Selecciona el bloque:", bloques_disponibles)
+    if not bloque_sel:
+        return
 
-        col3, col4 = st.columns(2)
-        with col3:
-            caracteristica = st.text_input("Característica:", value=datos.get("caracteristica", ""), key="caracteristica")
-        with col4:
-            grupo = st.text_input("Grupo muscular principal:", value=datos.get("grupo_muscular_principal", ""), key="grupo")
+    # === Mostrar ejercicios del bloque seleccionado ===
+    st.markdown(f"### 📝 Editar ejercicios del Día {dia_sel} - Bloque {bloque_sel}")
+    ejercicios_editados = []
 
-        patron = st.text_input("Patrón de movimiento:", value=datos.get("patron_de_movimiento", ""), key="patron")
+    for idx, ej in enumerate(ejercicios_dia):
+        if ej.get("bloque", "") != bloque_sel:
+            continue
 
-        # === NOMBRE AUTOCOMPLETADO ===
-        nombre = f"{implemento.strip()} {detalle.strip()}".strip()
-        st.text_input("Nombre completo del ejercicio:", value=nombre, key="nombre", disabled=True)
+        st.markdown(f"**Ejercicio {idx + 1}**")
+        ejercicio = ej.copy()
 
-        if st.button("Guardar Ejercicio"):
-            if nombre:
-                doc_id = normalizar_texto(nombre)
-                datos_guardar = {
-                    "nombre": nombre,
-                    "caracteristica": caracteristica,
-                    "detalle": detalle,
-                    "grupo_muscular_principal": grupo,
-                    "implemento": implemento,
-                    "patron_de_movimiento": patron
-                }
-                try:
-                    db.collection("ejercicios").document(doc_id).set(datos_guardar)
-                    st.success(f"✅ Ejercicio '{nombre}' guardado correctamente")
-                except Exception as e:
-                    st.error(f"❌ Error al guardar: {e}")
-            else:
-                st.warning("⚠️ El campo 'nombre' es obligatorio.")
+        cols = st.columns([4, 1, 2, 2, 1])
+        ejercicio["ejercicio"] = cols[0].text_input("Ejercicio", value=ej.get("ejercicio", ""), key=f"ej_{idx}_nombre")
+        ejercicio["series"] = cols[1].text_input("Series", value=ej.get("series", ""), key=f"ej_{idx}_series")
+        ejercicio["repeticiones"] = cols[2].text_input("Reps (min o máx)", value=ej.get("repeticiones", ""), key=f"ej_{idx}_reps")
+        ejercicio["peso"] = cols[3].text_input("Peso", value=ej.get("peso", ""), key=f"ej_{idx}_peso")
+        ejercicio["rir"] = cols[4].text_input("RIR", value=ej.get("rir", ""), key=f"ej_{idx}_rir")
 
-    else:
-        st.info("👈 Selecciona una opción para comenzar.")
+        col_desc, col_com = st.columns([2, 3])
+        ejercicio["descripcion"] = col_desc.text_input("Descripción", value=ej.get("descripcion", ""), key=f"ej_{idx}_descripcion")
+        ejercicio["comentario"] = col_com.text_input("Comentario", value=ej.get("comentario", ""), key=f"ej_{idx}_comentario")
+
+        ejercicio["bloque"] = bloque_sel
+        ejercicios_editados.append((idx, ejercicio))
+        st.markdown("---")
+
+
+    if st.button("✅ Aplicar cambios a este bloque y futuras semanas"):
+        try:
+            fecha_sel = datetime.strptime(semana_sel, "%Y-%m-%d")
+        except ValueError:
+            st.error("Formato de fecha inválido")
+            return
+
+        docs_futuras = db.collection("rutinas_semanales") \
+            .where("correo", "==", correo) \
+            .stream()
+
+        total_actualizados = 0
+
+        for doc in docs_futuras:
+            data = doc.to_dict()
+            fecha_doc_str = data.get("fecha_lunes", "")
+            try:
+                fecha_doc = datetime.strptime(fecha_doc_str, "%Y-%m-%d")
+                if fecha_doc >= fecha_sel:
+                    rutina_futura = data.get("rutina", {})
+                    if dia_sel in rutina_futura:
+                        dia_data = rutina_futura[dia_sel]
+                        for idx, nuevo_ejercicio in ejercicios_editados:
+                            if idx in dia_data and dia_data[idx].get("bloque", "") == bloque_sel:
+                                dia_data[idx] = nuevo_ejercicio
+                        db.collection("rutinas_semanales").document(doc.id).update({"rutina": rutina_futura})
+                        total_actualizados += 1
+            except:
+                continue
+
+        st.success(f"✅ Cambios aplicados en {total_actualizados} semana(s).")
+
