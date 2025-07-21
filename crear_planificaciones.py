@@ -79,12 +79,17 @@ def crear_rutinas():
             for seccion in ["Warm Up", "Work Out"]:
                 st.subheader(f"{seccion}" if seccion == "Warm Up" else f"{seccion}")
                 # === Botón para agregar fila en la sección correspondiente
+                key_seccion = f"{dia_key}_{seccion.replace(' ', '_')}"
+
                 if st.button(f"➕ Agregar fila a {seccion} ({dias[i]})", key=f"add_row_{i}_{seccion}"):
                     nueva_fila = {k: "" for k in columnas_tabla}
                     nueva_fila["Sección"] = seccion
+
+                    if key_seccion not in st.session_state:
+                        st.session_state[key_seccion] = []
+
                     st.session_state[key_seccion].append(nueva_fila)
 
-                key_seccion = f"{dia_key}_{seccion.replace(' ', '_')}"
                 if key_seccion not in st.session_state:
                     st.session_state[key_seccion] = [{k: "" for k in columnas_tabla} for _ in range(6)]
                     for f in st.session_state[key_seccion]:
@@ -145,6 +150,18 @@ def crear_rutinas():
                             "Coincidencias", ejercicios_encontrados if ejercicios_encontrados else ["(sin resultados)"],
                             key=f"selectbox_{key_entrenamiento}", label_visibility="collapsed"
                         )
+
+                        if seleccionado != "(sin resultados)":
+                            fila["Ejercicio"] = seleccionado
+
+                            # ✅ Si el ejercicio tiene link de video en Firestore y aún no hay uno manual, lo asignamos automáticamente
+                            if not fila.get("Video"):
+                                video_auto = ejercicios_dict.get(seleccionado, {}).get("video", "").strip()
+                                if video_auto:
+                                    fila["Video"] = video_auto
+                        else:
+                            fila["Ejercicio"] = fila.get("Ejercicio", "")
+
 
                         fila["Ejercicio"] = seleccionado if seleccionado != "(sin resultados)" else fila.get("Ejercicio", "")
                     else:
