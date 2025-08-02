@@ -166,7 +166,19 @@ def ver_rutinas():
                     semana_anterior = semanas[idx_actual + 1]
                     doc_ant = next((r for r in rutinas_cliente if r["fecha_lunes"] == semana_anterior), None)
                     if doc_ant:
-                        ejercicios_prev = doc_ant.get("rutina", {}).get(str(dia_sel), [])
+                        ejercicios_prev_raw = doc_ant.get("rutina", {}).get(str(dia_sel), [])
+
+                        if isinstance(ejercicios_prev_raw, dict) and "ejercicios" in ejercicios_prev_raw:
+                            ejercicios_prev = ejercicios_prev_raw["ejercicios"]
+                        elif isinstance(ejercicios_prev_raw, dict):
+                            ejercicios_prev = [ejercicios_prev_raw[k] for k in sorted(ejercicios_prev_raw.keys(), key=int)]
+                        elif isinstance(ejercicios_prev_raw, list):
+                            ejercicios_prev = ejercicios_prev_raw
+                        else:
+                            ejercicios_prev = []
+
+                        ejercicios_prev = [ex for ex in ejercicios_prev if isinstance(ex, dict)]
+
                         nombre_actual = e.get("ejercicio", "").strip().lower()
                         circuito_actual = e.get("circuito", "").strip().lower()
                         match_prev = next(
