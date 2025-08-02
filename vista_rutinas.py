@@ -32,11 +32,20 @@ def ver_rutinas():
 
     @st.cache_data
     def cargar_rutinas_filtradas(correo, rol):
-        if es_entrenador(rol):
+        if rol == "admin":
             docs = db.collection("rutinas_semanales").stream()
-        else:
+            return [doc.to_dict() for doc in docs]
+
+        elif rol == "entrenador":
+            docs = db.collection("rutinas_semanales").where("entrenador", "==", correo).stream()
+            return [doc.to_dict() for doc in docs]
+
+        elif rol == "deportista":
             docs = db.collection("rutinas_semanales").where("correo", "==", correo).stream()
-        return [doc.to_dict() for doc in docs]
+            return [doc.to_dict() for doc in docs]
+
+        else:
+            return []
 
     correo_raw = st.session_state.get("correo", "").strip().lower()
     if not correo_raw:
@@ -85,11 +94,29 @@ def ver_rutinas():
         st.warning("⚠️ No hay rutina para esa semana.")
         st.stop()
 
-    dias_disponibles = sorted(rutina_doc["rutina"].keys(), key=int)
+    dias_disponibles = sorted(
+        [k for k in rutina_doc["rutina"].keys() if k.isdigit()],
+        key=int
+    )
+
+    if not dias_disponibles:
+        st.warning("⚠️ No hay días disponibles con ejercicios.")
+        st.stop()
+
     dia_sel = st.selectbox("📅 Día", dias_disponibles, key="dia_sel")
 
-    ejercicios = rutina_doc["rutina"][dia_sel]
+    # Obtener bloque del día (estructura nueva o antigua)
+    bloque_dia = rutina_doc["rutina"].get(dia_sel, {})
+
+    if isinstance(bloque_dia, dict) and "ejercicios" in bloque_dia:
+        ejercicios = bloque_dia.get("ejercicios", [])
+        valor_rpe_inicial = bloque_dia.get("rpe", 0)
+    else:
+        ejercicios = bloque_dia  # lista directamente
+        valor_rpe_inicial = 0
+
     ejercicios.sort(key=ordenar_circuito)
+
 
     st.markdown(f"### Ejercicios del día {dia_sel}")
     
@@ -445,21 +472,32 @@ def ver_rutinas():
                                 st.write(f"      ✔️ `{ef['ejercicio']}`: {peso_futuro_original} + {delta} = {nuevo_peso}kg")
 
                         # ✅ Actualizar solo el día específico
-                        doc_ref.update({f"rutina.{dia_sel}": ejercicios_fut})
+                        doc_ref.update({
+                            f"rutina.{dia_sel}.ejercicios": ejercicios_fut
+                        })
+
                         st.write(f"   🔄 Documento `{doc_id_fut}` actualizado con éxito.")
                     else:
                         st.warning(f"⚠️ Documento `{doc_id_fut}` no existe ➜ Se omite.")
 
-            # ✅ Paso final: guardar nuevamente ejercicios actualizados en la semana actual
-            # ✅ Guardar ejercicios y RPE
-            db.collection("rutinas_semanales").document(doc_id).update({
-                f"rutina.{dia_sel}": ejercicios,
-                f"rutina.{dia_sel}_rpe": rpe_valor
-            })
+            # ✅ Paso final: guardar ejercicios actualizados solo si el documento ya existe
+            doc_ref_final = db.collection("rutinas_semanales").document(doc_id)
+            doc_final = doc_ref_final.get()
+
+            if doc_final.exists:
+                doc_ref_final.update({
+                    f"rutina.{dia_sel}": {
+                        "ejercicios": ejercicios,
+                        "rpe": rpe_valor
+                    }
+                })
+                st.success(f"✅ Cambios guardados correctamente en `{doc_id}`.")
+            else:
+                st.warning(f"⚠️ No se encontró el documento `{doc_id}` ➜ No se guardaron los cambios.")
+
 
             st.success(f"✅ TODOS LOS CAMBIOS guardados correctamente en `{doc_id}`.")
 
         except Exception as e:
             st.error("❌ Error durante el guardado paso a paso.")
             st.exception(e)
-
