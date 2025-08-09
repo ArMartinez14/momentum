@@ -11,7 +11,7 @@ import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 import streamlit as st
-from notificaciones_service import diff_rutina, crear_notificaciones
+
 import unicodedata
 from datetime import date, timedelta
 
