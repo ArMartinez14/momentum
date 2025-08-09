@@ -7,14 +7,16 @@ from vista_rutinas import ver_rutinas
 from borrar_rutinas import borrar_rutinas
 from ingresar_cliente_view import ingresar_cliente_o_video_o_ejercicio
 from crear_planificaciones import crear_rutinas
+from editar_rutinas import editar_rutinas
+from crear_descarga import descarga_rutina
 
 import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app
 import json   # 👈 importante para leer el secreto
 
-# === INICIALIZAR ###FIREBASE desde Secrets ===
+
+# === INICIALIZAR FIREBASE desde Secrets ===
 if not firebase_admin._apps:
-    # Lee el secreto como cadena JSON y convierte a dict
     cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
     cred = credentials.Certificate(cred_dict)
     initialize_app(cred)
@@ -62,7 +64,8 @@ opciones_menu = (
     "Crear Rutinas",
     "Ingresar Deportista o Video",
     "Borrar Rutinas",
-    "Editar Rutinas"
+    "Editar Rutinas",
+    "Descarga Rutina"  # 👈 Nueva opción
 )
 opcion = st.sidebar.radio("Selecciona una opción:", opciones_menu)
 
@@ -83,4 +86,6 @@ elif opcion == "Borrar Rutinas":
 elif opcion == "Crear Rutinas":
     crear_rutinas()
 elif opcion == "Editar Rutinas":
-    st.write("Aquí iría el módulo de editar rutinas.")
+    editar_rutinas()
+elif opcion == "Descarga Rutina":  # 👈 Llamada a la nueva sección
+    descarga_rutina()
