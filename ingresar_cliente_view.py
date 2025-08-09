@@ -31,7 +31,13 @@ def ingresar_cliente_o_video_o_ejercicio():
     if opcion == "Cliente Nuevo":
         nombre = st.text_input("Nombre del cliente:")
         correo = st.text_input("Correo del cliente:")
-        rol = st.selectbox("Rol:", ["deportista", "entrenador", "admin"])
+        # Rol según el usuario logueado
+        if st.session_state.rol == "admin":
+            opciones_rol = ["deportista", "entrenador", "admin"]
+        else:
+            opciones_rol = ["deportista"]
+
+        rol = st.selectbox("Rol:", opciones_rol)
 
         if st.button("Guardar Cliente"):
             if nombre and correo and rol:
