@@ -11,7 +11,6 @@ import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 import streamlit as st
-
 import unicodedata
 from datetime import date, timedelta
 
@@ -502,4 +501,3 @@ def crear_rutinas():
             guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias)
         else:
             st.warning("⚠️ Completa nombre, correo y entrenador antes de guardar.")
-
