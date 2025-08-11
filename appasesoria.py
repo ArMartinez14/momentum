@@ -2,14 +2,14 @@ import streamlit as st
 
 # ⚡️ 1) SIEMPRE primero:
 st.set_page_config(page_title="Momentum", layout="wide")
-
+from seccion_ejercicios import base_ejercicios
 from vista_rutinas import ver_rutinas
 from borrar_rutinas import borrar_rutinas
 from ingresar_cliente_view import ingresar_cliente_o_video_o_ejercicio
 from crear_planificaciones import crear_rutinas
 from editar_rutinas import editar_rutinas
 from crear_descarga import descarga_rutina
-
+from reportes import ver_reportes
 import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app
 import json   # 👈 importante para leer el secreto
@@ -65,7 +65,9 @@ opciones_menu = (
     "Ingresar Deportista o Video",
     "Borrar Rutinas",
     "Editar Rutinas",
-    "Descarga Rutina"  # 👈 Nueva opción
+    "Ejercicios",
+    "Descarga Rutina",
+    "Reportes" # 👈 Nueva opción
 )
 opcion = st.sidebar.radio("Selecciona una opción:", opciones_menu)
 
@@ -89,3 +91,7 @@ elif opcion == "Editar Rutinas":
     editar_rutinas()
 elif opcion == "Descarga Rutina":  # 👈 Llamada a la nueva sección
     descarga_rutina()
+elif opcion == "Ejercicios":  
+    base_ejercicios()
+elif opcion == "Reportes":
+    ver_reportes()
