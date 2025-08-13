@@ -5,13 +5,80 @@ from datetime import datetime, timedelta
 import json
 from herramientas import actualizar_progresiones_individual
 
+# === Reemplaza ESTA función por una más robusta
 def obtener_lista_ejercicios(data_dia):
-    if isinstance(data_dia, dict):
-        return list(data_dia.values())
-    elif isinstance(data_dia, list):
-        return data_dia
-    else:
+    """
+    Devuelve SIEMPRE una lista de dicts (ejercicios).
+    Soporta formatos:
+    - {"ejercicios": {"0": {...}, "1": {...}}}
+    - {"0": {...}, "1": {...}}
+    - [ {...}, {...} ]
+    """
+    if data_dia is None:
         return []
+
+    # Caso dict
+    if isinstance(data_dia, dict):
+        # 1) Estructura con clave 'ejercicios'
+        if "ejercicios" in data_dia:
+            ejercicios = data_dia["ejercicios"]
+            if isinstance(ejercicios, dict):
+                # ordenar por índice numérico si se puede
+                try:
+                    pares = sorted(ejercicios.items(), key=lambda kv: int(kv[0]))
+                    return [v for _, v in pares if isinstance(v, dict)]
+                except Exception:
+                    return [v for v in ejercicios.values() if isinstance(v, dict)]
+            elif isinstance(ejercicios, list):
+                return [e for e in ejercicios if isinstance(e, dict)]
+            else:
+                return []
+
+        # 2) Estructura como mapa indexado {"0": {...}}
+        #    (si hay claves numéricas, tomamos esos values)
+        claves_numericas = [k for k in data_dia.keys() if str(k).isdigit()]
+        if claves_numericas:
+            try:
+                pares = sorted(((k, data_dia[k]) for k in claves_numericas), key=lambda kv: int(kv[0]))
+                return [v for _, v in pares if isinstance(v, dict)]
+            except Exception:
+                return [data_dia[k] for k in data_dia if isinstance(data_dia[k], dict)]
+
+        # 3) Si no hay nada de lo anterior, por si acaso mira los values
+        return [v for v in data_dia.values() if isinstance(v, dict)]
+
+    # Caso lista (ya viene como lista de ejercicios o trae cosas mezcladas)
+    if isinstance(data_dia, list):
+        # si accidentalmente vino una lista que contiene un dict con 'ejercicios'
+        if len(data_dia) == 1 and isinstance(data_dia[0], dict) and "ejercicios" in data_dia[0]:
+            return obtener_lista_ejercicios(data_dia[0])
+        return [e for e in data_dia if isinstance(e, dict)]
+
+    # Cualquier otro tipo
+    return []
+
+
+def a_lista_de_ejercicios(ejercicios):
+    if ejercicios is None:
+        return []
+
+    # Si viene como dict { "0": {...}, "1": {...} }
+    if isinstance(ejercicios, dict):
+        # Ordenar por clave numérica si aplica y tomar los values
+        try:
+            pares = sorted(ejercicios.items(), key=lambda kv: int(kv[0]))
+            ejercicios = [v for _, v in pares]
+        except Exception:
+            # Si las claves no son numéricas, tomar values sin ordenar
+            ejercicios = list(ejercicios.values())
+
+    # Si viene como algo que no es lista ni dict, lo vacío
+    if not isinstance(ejercicios, list):
+        ejercicios = []
+
+    # Filtrar solo dicts válidos
+    ejercicios = [e for e in ejercicios if isinstance(e, dict)]
+    return ejercicios
 
 def ver_rutinas():
     # === INICIALIZAR FIREBASE SOLO UNA VEZ solo una===
@@ -33,9 +100,15 @@ def ver_rutinas():
     def es_entrenador(rol):
         return rol.lower() in ["entrenador", "admin", "administrador"]
 
+    # === Endurece el key de orden para evitar crashear
     def ordenar_circuito(ejercicio):
+        if not isinstance(ejercicio, dict):
+            return 99
         orden = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7}
-        return orden.get(ejercicio.get("circuito", ""), 99)
+        return orden.get(str(ejercicio.get("circuito", "")).upper(), 99)
+    def ordenar_circuito(ejercicio):
+            orden = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7}
+            return orden.get(ejercicio.get("circuito", ""), 99)
 
     @st.cache_data
     def cargar_rutinas_filtradas(correo, rol):
@@ -119,9 +192,11 @@ def ver_rutinas():
         key=int
     )
 
+    # === Donde obtienes los ejercicios del día, usa SIEMPRE el extractor
     dia_sel = st.selectbox("📅 Día", dias_disponibles, key="dia_sel")
     ejercicios = obtener_lista_ejercicios(rutina_doc["rutina"][dia_sel])
     ejercicios.sort(key=ordenar_circuito)
+
 
     st.markdown(f"### Ejercicios del día {dia_sel}")
     
@@ -227,8 +302,11 @@ def ver_rutinas():
                     doc_ant = next((r for r in rutinas_cliente if r["fecha_lunes"] == semana_ant), None)
 
                     if doc_ant:
+                        # === En la sección "sesión anterior", usa el mismo extractor
+                        ...
                         rutina_ant = doc_ant.get("rutina", {})
-                        ejercicios_ant = rutina_ant.get(str(dia_sel), [])
+                        ejercicios_ant = obtener_lista_ejercicios(rutina_ant.get(str(dia_sel), []))
+                        ...
 
                         nombre_actual = e.get("ejercicio", "").strip().lower()
                         circuito_actual = e.get("circuito", "").strip().lower()
