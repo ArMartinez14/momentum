@@ -493,4 +493,3 @@ def crear_rutinas():
             guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias_labels)
         else:
             st.warning("⚠️ Completa nombre, correo y entrenador antes de guardar.")
-
