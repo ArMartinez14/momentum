@@ -10,6 +10,7 @@ from crear_planificaciones import crear_rutinas
 from editar_rutinas import editar_rutinas
 from crear_descarga import descarga_rutina
 from reportes import ver_reportes
+
 import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app
 import json   # 👈 importante para leer el secreto
@@ -28,6 +29,28 @@ if "correo" not in st.session_state:
     st.session_state.correo = ""
 if "rol" not in st.session_state:
     st.session_state.rol = ""
+# 👇 nuevos estados para el saludo
+if "nombre_completo" not in st.session_state:
+    st.session_state.nombre_completo = ""
+if "primer_nombre" not in st.session_state:
+    st.session_state.primer_nombre = ""
+
+def extraer_primer_nombre(nombre: str, correo: str) -> str:
+    """
+    Devuelve el primer nombre a partir del campo 'nombre'.
+    Si viene vacío o None, usa la parte antes de la @ del correo.
+    """
+    try:
+        if nombre and isinstance(nombre, str):
+            # divide por espacios y toma el primer token no vacío
+            tokens = [t for t in nombre.strip().split() if t]
+            if tokens:
+                return tokens[0]
+        # Fallback: parte del correo antes de la @, capitalizada
+        user = (correo.split("@")[0] if correo else "Usuario").replace(".", " ").strip()
+        return user.title()
+    except Exception:
+        return "Usuario"
 
 # === 1️⃣ LOGIN obligatorio ===
 if not st.session_state.correo:
@@ -44,14 +67,22 @@ if not st.session_state.correo:
         if usuario:
             st.session_state.correo = correo_input
             st.session_state.rol = usuario.get("rol", "").lower()
-            st.success(f"Bienvenido, {st.session_state.rol.title()} ✅")
+            st.session_state.nombre_completo = usuario.get("nombre", "") or ""
+            st.session_state.primer_nombre = extraer_primer_nombre(
+                st.session_state.nombre_completo, st.session_state.correo
+            )
+
+            # Mensaje de bienvenida con saludo personalizado
+            st.success(f"👋 Hola {st.session_state.primer_nombre}. Bienvenido, {st.session_state.rol.title()} ✅")
             st.rerun()
         else:
             st.error("Correo no encontrado. Verifica o contacta al administrador.")
     st.stop()
 
-# === 2️⃣ Deportista: va directo a ver rutina ===
+# === 2️⃣ Deportista: va directo a ver rutina (con saludo) ===
 if st.session_state.rol == "deportista":
+    if st.session_state.primer_nombre:
+        st.markdown(f"### 👋 Hola {st.session_state.primer_nombre}")
     ver_rutinas()
     st.stop()
 
@@ -67,18 +98,24 @@ opciones_menu = (
     "Editar Rutinas",
     "Ejercicios",
     "Descarga Rutina",
-    "Reportes" # 👈 Nueva opción
+    "Reportes"  # 👈 Nueva opción
 )
 opcion = st.sidebar.radio("Selecciona una opción:", opciones_menu)
 
 if opcion == "Inicio":
-    st.markdown("""
-        <div style='text-align: center; margin-top: 100px;'>
-            <img src='https://i.ibb.co/YL1HbLj/motion-logo.png' width='100'>
-            <h1>Bienvenido a Momentum</h1>
-            <p style='font-size:18px;'>Selecciona una opción del menú para comenzar</p>
+    primer_nombre = st.session_state.primer_nombre or "Usuario"
+    
+    st.markdown(f"""
+        <div style='text-align: center; margin-top: 20px;'>
+            <img src='https://i.ibb.co/YL1HbLj/motion-logo.png' width='100'><br>
+            <h1 style="color:white; font-weight:bold;">
+                👋 Hola {primer_nombre}! — Bienvenido a Momentum
+            </h1>
+            <p style='font-size:18px; color:white;'>Selecciona una opción del menú para comenzar</p>
         </div>
         """, unsafe_allow_html=True)
+
+
 elif opcion == "Ver Rutinas":
     ver_rutinas()
 elif opcion == "Ingresar Deportista o Video":
@@ -89,9 +126,9 @@ elif opcion == "Crear Rutinas":
     crear_rutinas()
 elif opcion == "Editar Rutinas":
     editar_rutinas()
-elif opcion == "Descarga Rutina":  # 👈 Llamada a la nueva sección
+elif opcion == "Descarga Rutina":
     descarga_rutina()
-elif opcion == "Ejercicios":  
+elif opcion == "Ejercicios":
     base_ejercicios()
 elif opcion == "Reportes":
     ver_reportes()
