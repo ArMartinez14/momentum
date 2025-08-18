@@ -52,6 +52,35 @@ def mostrar_banner_motivador(texto: str):
         unsafe_allow_html=True
     )
 
+# ✅ Normaliza cualquier "ejercicio" a dict uniforme
+def _to_ej_dict(x):
+    if isinstance(x, dict):
+        return x
+    if isinstance(x, str):
+        return {
+            "bloque": "",
+            "seccion": "",
+            "circuito": "",
+            "ejercicio": x,
+            "detalle": "",
+            "series": "",
+            "reps_min": "",
+            "reps_max": "",
+            "peso": "",
+            "tiempo": "",
+            "velocidad": "",
+            "rir": "",
+            "tipo": "",
+            "video": "",
+        }
+    return {}
+
+# ✅ Orden seguro por circuito (quita la definición duplicada)
+def ordenar_circuito(ejercicio):
+    if not isinstance(ejercicio, dict):
+        return 99
+    orden = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7}
+    return orden.get(str(ejercicio.get("circuito", "")).upper(), 99)
 
 # === Reemplaza ESTA función por una más robusta
 def obtener_lista_ejercicios(data_dia):
@@ -572,19 +601,35 @@ def ver_rutinas():
                         doc_ref = db.collection("rutinas_semanales").document(doc_id_fut)
                         doc = doc_ref.get()
                         if not doc.exists:
-                            continue  # silenciado
+                            continue
 
                         rutina_fut = doc.to_dict().get("rutina", {})
-                        ejercicios_fut = rutina_fut.get(dia_sel, [])
-                        for ef in ejercicios_fut:
-                            if (
-                                ef.get("ejercicio") == nombre_ejercicio and
-                                ef.get("circuito")  == circuito and
-                                (ef.get("bloque") == bloque or ef.get("seccion") == bloque)
-                            ):
-                                peso_futuro_original = float(ef.get("peso", 0))
-                                ef["peso"] = round(peso_futuro_original + delta, 2)
-                        doc_ref.update({f"rutina.{dia_sel}": ejercicios_fut})
+                        # ✅ usar siempre el extractor (soporta dict/list/'ejercicios')
+                        ejercicios_fut_raw = rutina_fut.get(dia_sel, [])
+                        ejercicios_fut = obtener_lista_ejercicios(ejercicios_fut_raw)
+
+                        changed = False
+                        for j, ef_raw in enumerate(ejercicios_fut):
+                            ef = _to_ej_dict(ef_raw)  # <-- normaliza si venía como string
+
+                            mismo_ejercicio = (ef.get("ejercicio", "") == nombre_ejercicio)
+                            mismo_circuito  = (ef.get("circuito", "")  == circuito)
+                            mismo_bloque    = (ef.get("bloque", ef.get("seccion", "")) == bloque)
+
+                            if mismo_ejercicio and mismo_circuito and mismo_bloque:
+                                try:
+                                    base = ef.get("peso", 0)
+                                    base = 0 if base == "" else float(str(base).replace(",", "."))
+                                except Exception:
+                                    base = 0.0
+                                ef["peso"] = round(base + float(delta), 2)
+                                ejercicios_fut[j] = ef
+                                changed = True
+
+                        if changed:
+                            # Guardar el día como lista uniforme
+                            doc_ref.update({f"rutina.{dia_sel}": ejercicios_fut})
+
 
                 # ✅ Actualiza documento actual
                 doc_ref_final = db.collection("rutinas_semanales").document(doc_id)
