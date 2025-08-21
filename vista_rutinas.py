@@ -7,7 +7,9 @@ from herramientas import actualizar_progresiones_individual
 import random
 from datetime import date
 
-MENSAJES_MOTIVADORES = [
+# ✅ Lista única (normales + anime, sin mencionar series/personajes)
+MENSAJES_MOTIVACIONALES = [
+    # Base normales
     "💪 ¡Éxito en tu entrenamiento de hoy, {nombre}! 🔥",
     "🚀 {nombre}, cada repetición te acerca más a tu objetivo.",
     "🏋️‍♂️ {nombre}, hoy es un gran día para superar tus límites.",
@@ -17,7 +19,36 @@ MENSAJES_MOTIVADORES = [
     "🌟 Nunca te detengas, {nombre}. ¡Hoy vas a brillar en tu entrenamiento!",
     "🏆 {nombre}, recuerda: disciplina > motivación. ¡Tú puedes!",
     "🙌 A disfrutar el proceso, {nombre}. ¡Confía en ti!",
-    "💥 {nombre}, el esfuerzo de hoy es el resultado de mañana."
+    "💥 {nombre}, el esfuerzo de hoy es el resultado de mañana.",
+
+    # Frases de inspiración anime (sin referencias)
+    "💥 {nombre}, el poder viene en respuesta a una necesidad, no a un deseo.",
+    "⚡ {nombre}, supera tus límites ahora mismo.",
+    "🔥 {nombre}, no rendirse es tu especialidad.",
+    "🍃 {nombre}, jamás te rindas.",
+    "🔥 {nombre}, el trabajo duro es inútil para quien no cree en sí mismo.",
+    "🌀 {nombre}, los fracasos enseñan cosas que el éxito no.",
+    "☠️ {nombre}, no importa cuán difícil se ponga, nunca retrocedas.",
+    "🌊 {nombre}, los sueños nunca terminan.",
+    "🔥 {nombre}, los sueños de los hombres nunca mueren.",
+    "💥 {nombre}, un héroe sonríe incluso cuando tiene el corazón hecho pedazos.",
+    "🌟 {nombre}, más allá de los límites, Plus Ultra.",
+    "⚡ {nombre}, conviértete en el héroe que quieres ser.",
+    "🛡️ {nombre}, si ganas, vives. Si pierdes, mueres. Si no luchas, no puedes ganar.",
+    "⚔️ {nombre}, el mundo es cruel… pero también es muy hermoso.",
+    "🔥 {nombre}, la única cosa que puedes hacer es no arrepentirte de tu elección.",
+    "🏹 {nombre}, si vas a arriesgar tu vida, necesitas una razón.",
+    "🌌 {nombre}, no te rindas pase lo que pase.",
+    "💥 {nombre}, el deseo y la determinación mueven al cuerpo más allá de sus límites.",
+    "⚔️ {nombre}, el miedo no es malo; te muestra dónde debes mejorar.",
+    "🔥 {nombre}, si quieres vencer, aprende primero a soportar.",
+    "🌌 {nombre}, protégente a ti mismo para poder proteger a otros.",
+    "🔥 {nombre}, tu corazón es tu espada.",
+    "🌙 {nombre}, no te detengas. Respira, concéntrate y avanza.",
+    "⚔️ {nombre}, la determinación enciende un fuego que ni la noche apaga.",
+    "⚖️ {nombre}, para obtener algo, algo de igual valor debe perderse.",
+    "🔥 {nombre}, sigue adelante. No te detengas. No te arrepientas.",
+    "💥 {nombre}, levántate tantas veces como haga falta.",
 ]
 
 def mensaje_motivador_del_dia(nombre: str, correo_id: str) -> str:
@@ -28,9 +59,8 @@ def mensaje_motivador_del_dia(nombre: str, correo_id: str) -> str:
     hoy = date.today().isoformat()
     key = f"mot_msg_{correo_id}_{hoy}"
 
-    # Si no existe para hoy, lo elegimos y guardamos
     if key not in st.session_state:
-        st.session_state[key] = random.choice(MENSAJES_MOTIVADORES).format(nombre=nombre)
+        st.session_state[key] = random.choice(MENSAJES_MOTIVACIONALES).format(nombre=nombre or "Atleta")
 
     return st.session_state[key]
 
