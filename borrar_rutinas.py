@@ -16,36 +16,81 @@ def borrar_rutinas():
 
     correo_input = st.text_input("Ingresa el correo del cliente:")
 
-    if correo_input:
-        correo_normalizado = correo_input.replace("@", "_").replace(".", "_").lower()
+    if not correo_input:
+        return
 
-        docs = db.collection("rutinas").stream()
-        semanas = {}
+    # Preparar variantes de búsqueda
+    correo_raw = correo_input.strip()
+    raw_lower = correo_raw.lower()
+    correo_norm = correo_raw.replace("@", "_").replace(".", "_").lower()
 
-        for doc in docs:
-            doc_id = doc.id
-            if doc_id.startswith(correo_normalizado):
-                partes = doc_id.split("_")
-                if len(partes) >= 6:
-                    fecha_semana = f"{partes[3]}_{partes[4]}_{partes[5]}"
-                    if fecha_semana not in semanas:
-                        semanas[fecha_semana] = []
-                    semanas[fecha_semana].append(doc.id)
+    # Buscaremos en estas colecciones
+    colecciones = ["rutinas", "rutinas_semanales"]
 
-        if not semanas:
-            st.warning("No se encontraron rutinas para ese correo.")
-            return
+    semanas = {}
+    hallados_debug = []   # para mostrar ejemplos de IDs encontrados
+    total_refs = 0
 
-        semanas_ordenadas = sorted(semanas.keys(), reverse=True)
+    for nombre_col in colecciones:
+        try:
+            col_ref = db.collection(nombre_col)
+            # list_documents() obtiene referencias sin leer todo el doc (más rápido que .stream())
+            for ref in col_ref.list_documents():
+                total_refs += 1
+                doc_id = ref.id
+                did_lower = doc_id.lower()
 
-        st.markdown("### Selecciona las semanas que deseas eliminar:")
-        semanas_seleccionadas = []
-        for semana in semanas_ordenadas:
-            if st.checkbox(f"Semana {semana}", key=semana):
-                semanas_seleccionadas.append(semana)
+                # 1) Prefijo exacto (correo tal cual) o normalizado
+                match_prefix = did_lower.startswith(raw_lower) or did_lower.startswith(correo_norm)
 
-        if semanas_seleccionadas and st.button("🗑️ Eliminar semanas seleccionadas"):
-            for semana in semanas_seleccionadas:
-                for doc_id in semanas[semana]:
-                    db.collection("rutinas").document(doc_id).delete()
-            st.success("Se eliminaron las semanas seleccionadas correctamente.")
+                # 2) Si no hubo prefijo, intentamos contains por si el correo está en medio
+                match_contains = (raw_lower in did_lower) or (correo_norm in did_lower)
+
+                if match_prefix or match_contains:
+                    hallados_debug.append((nombre_col, doc_id))
+
+                    # Extraer fecha desde el final del ID: ..._YYYY_MM_DD
+                    try:
+                        base, y, m, d = doc_id.rsplit("_", 3)
+                        fecha_semana = f"{y}_{m}_{d}"
+                    except ValueError:
+                        # No cumple patrón de fecha al final, saltamos
+                        continue
+
+                    semanas.setdefault(fecha_semana, []).append((nombre_col, doc_id))
+        except Exception as e:
+            st.error(f"Error leyendo colección '{nombre_col}': {e}")
+
+    if not semanas:
+        st.warning("No se encontraron rutinas para ese correo (probado: tal cual, normalizado, prefijo y contains).")
+        with st.expander("Detalles de ayuda"):
+            st.markdown("- **Ejemplo de ID esperado:** `correo@dominio.com_YYYY_MM_DD` o `correo_dominio_com_YYYY_MM_DD`")
+            st.write(f"Correo ingresado: {correo_raw}")
+            st.write(f"Correo normalizado probado: {correo_norm}")
+            st.write(f"Total de refs inspeccionadas: {total_refs}")
+            if hallados_debug:
+                st.write("Se encontraron algunos IDs que contienen el correo, pero no tenían fecha válida al final:")
+                st.write(hallados_debug[:10])
+        return
+
+    # Mostrar semanas a eliminar
+    semanas_ordenadas = sorted(semanas.keys(), reverse=True)
+    st.markdown("### Selecciona las semanas que deseas eliminar:")
+    semanas_seleccionadas = []
+    for semana in semanas_ordenadas:
+        if st.checkbox(f"Semana {semana}", key=f"chk_{semana}"):
+            semanas_seleccionadas.append(semana)
+
+    # Panel de debug: primeros 10 hallados
+    with st.expander("Ver IDs encontrados (debug)"):
+        st.write(hallados_debug[:20])
+
+    if semanas_seleccionadas and st.button("🗑️ Eliminar semanas seleccionadas"):
+        batch = db.batch()
+        total_del = 0
+        for semana in semanas_seleccionadas:
+            for (col_name, doc_id) in semanas[semana]:
+                batch.delete(db.collection(col_name).document(doc_id))
+                total_del += 1
+        batch.commit()
+        st.success(f"Se eliminaron {total_del} documento(s) de las semanas seleccionadas.")
