@@ -3,6 +3,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import unicodedata
 import json
+import re  # 👈 NUEVO: para validar correo
 
 # 👇 NUEVO: importar el servicio de catálogos
 from servicio_catalogos import get_catalogos, add_item
@@ -20,6 +21,13 @@ def normalizar_id(correo):
 
 def normalizar_texto(texto):
     return unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('utf-8').lower().replace(" ", "_")
+
+# 👇 NUEVO: limpia espacios (inicio, fin y también intermedios)
+def limpiar_correo(correo: str) -> str:
+    if not correo:
+        return ""
+    # quita espacios al inicio/fin y también espacios internos
+    return ''.join(correo.strip().split())
 
 # 👇 NUEVO: helper para selectbox con opción "➕ Agregar nuevo…"
 def combo_con_agregar(titulo: str, opciones: list[str], key_base: str, valor_inicial: str = "") -> str:
@@ -83,9 +91,15 @@ def ingresar_cliente_o_video_o_ejercicio():
     # ================= CLIENTE NUEVO =================
     if opcion == "Cliente Nuevo":
         nombre = st.text_input("Nombre del cliente:")
-        correo = st.text_input("Correo del cliente:")
+        correo_input = st.text_input("Correo del cliente:")
+        correo_limpio = limpiar_correo(correo_input)  # 👈 NUEVO
+
+        # Vista previa del correo que se guardará
+        if correo_input:
+            st.caption(f"Se guardará como: **{correo_limpio or '—'}**")
+
         # Rol según el usuario logueado
-        if st.session_state.rol == "admin":
+        if st.session_state.get("rol") == "admin":
             opciones_rol = ["deportista", "entrenador", "admin"]
         else:
             opciones_rol = ["deportista"]
@@ -93,16 +107,34 @@ def ingresar_cliente_o_video_o_ejercicio():
         rol = st.selectbox("Rol:", opciones_rol)
 
         if st.button("Guardar Cliente"):
-            if nombre and correo and rol:
-                doc_id = normalizar_id(correo)
-                data = {"nombre": nombre, "correo": correo, "rol": rol}
-                try:
-                    db.collection("usuarios").document(doc_id).set(data)
-                    st.success(f"✅ Cliente '{nombre}' guardado correctamente")
-                except Exception as e:
-                    st.error(f"❌ Error al guardar: {e}")
-            else:
-                st.warning("⚠️ Completa todos los campos.")
+            # Validaciones
+            if not nombre:
+                st.warning("⚠️ Ingresa el nombre.")
+                return
+
+            if not correo_limpio:
+                st.warning("⚠️ Ingresa el correo.")
+                return
+
+            # Validación simple de correo (sin espacios y con @ y dominio)
+            patron_correo = r"^[^\s@]+@[^\s@]+\.[^\s@]+$"
+            if not re.match(patron_correo, correo_limpio):
+                st.warning("⚠️ El correo no parece válido. Revisa el formato (ej: nombre@dominio.com).")
+                return
+
+            if not rol:
+                st.warning("⚠️ Selecciona el rol.")
+                return
+
+            # Guardar usando SIEMPRE el correo limpio
+            doc_id = normalizar_id(correo_limpio)
+            data = {"nombre": nombre, "correo": correo_limpio, "rol": rol}
+
+            try:
+                db.collection("usuarios").document(doc_id).set(data)
+                st.success(f"✅ Cliente '{nombre}' guardado correctamente")
+            except Exception as e:
+                st.error(f"❌ Error al guardar: {e}")
 
     # ================= EJERCICIO NUEVO O EDITAR =================
     elif opcion == "Ejercicio Nuevo o Editar":
@@ -160,16 +192,16 @@ def ingresar_cliente_o_video_o_ejercicio():
         )
 
         # === NOMBRE AUTOCOMPLETADO ===
-        nombre = f"{implemento.strip()} {detalle.strip()}".strip()
-        st.text_input("Nombre completo del ejercicio:", value=nombre, key="nombre", disabled=True)
+        nombre_ej = f"{implemento.strip()} {detalle.strip()}".strip()
+        st.text_input("Nombre completo del ejercicio:", value=nombre_ej, key="nombre", disabled=True)
 
         if st.button("💾 Guardar Ejercicio", key="btn_guardar_ejercicio"):
-            if not nombre:
+            if not nombre_ej:
                 st.warning("⚠️ El campo 'nombre' es obligatorio.")
                 return
 
             datos_guardar = {
-                "nombre": nombre,
+                "nombre": nombre_ej,
                 "caracteristica": caracteristica,
                 "detalle": detalle,
                 "grupo_muscular_principal": grupo,
@@ -189,12 +221,11 @@ def ingresar_cliente_o_video_o_ejercicio():
                 return
 
             try:
-                doc_id = normalizar_texto(nombre)
+                doc_id = normalizar_texto(nombre_ej)
                 db.collection("ejercicios").document(doc_id).set(datos_guardar)
-                st.success(f"✅ Ejercicio '{nombre}' guardado correctamente")
+                st.success(f"✅ Ejercicio '{nombre_ej}' guardado correctamente")
             except Exception as e:
                 st.error(f"❌ Error al guardar: {e}")
 
     else:
         st.info("👈 Selecciona una opción para comenzar.")
-
