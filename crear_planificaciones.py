@@ -104,6 +104,11 @@ def crear_rutinas():
         st.info(f"🔁 Ajustado automáticamente al lunes {fecha_inicio.isoformat()}.")
 
     semanas = st.number_input("Semanas de duración:", min_value=1, max_value=12, value=4)
+    # === Objetivo de la rutina (opcional) ===
+    objetivo = st.text_area( "🎯 Objetivo de la rutina (opcional)",
+        value=st.session_state.get("objetivo", ""),
+    )
+    st.session_state["objetivo"] = objetivo
 
     correo_login = (st.session_state.get("correo") or "").strip().lower()
     entrenador = st.text_input("Correo del entrenador responsable:", value=correo_login, disabled=True)
@@ -490,6 +495,9 @@ def crear_rutinas():
     # ======= Guardar =======
     if st.button("Guardar Rutina"):
         if nombre_sel and correo and entrenador:
-            guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias_labels)
+            objetivo = st.session_state.get("objetivo", "")
+            # ✅ compatible hacia atrás: 'objetivo' es opcional en la función
+            guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias_labels, objetivo=objetivo)
         else:
             st.warning("⚠️ Completa nombre, correo y entrenador antes de guardar.")
+
