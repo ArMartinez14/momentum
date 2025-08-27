@@ -84,7 +84,7 @@ def ingresar_cliente_o_video_o_ejercicio():
 
     opcion = st.selectbox(
         "¿Qué deseas hacer?",
-        ["Selecciona...", "Cliente Nuevo", "Video de Ejercicio", "Ejercicio Nuevo o Editar"],
+        ["Selecciona...", "Cliente Nuevo", "Ejercicio Nuevo o Editar"],
         index=0
     )
 
