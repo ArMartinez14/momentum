@@ -20,6 +20,35 @@ def aplicar_progresion(valor_inicial, incremento, operacion):
 def normalizar_texto(texto):
     return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
 
+# herramientas.py  (agrega al final o donde prefieras)
+from typing import Any, Optional
+
+def safe_float(v: Any, default: Optional[float] = None) -> Optional[float]:
+    if v is None:
+        return default
+    if isinstance(v, (int, float)):
+        try:
+            return float(v)
+        except:
+            return default
+    try:
+        s = str(v).strip()
+        if not s:
+            return default
+        s = s.replace(",", ".")
+        # si llegara "8-10", toma el primero
+        if "-" in s:
+            s = s.split("-", 1)[0].strip()
+        return float(s)
+    except:
+        return default
+
+def to_float_or_none(v: Any) -> Optional[float]:
+    return safe_float(v, default=None)
+
+def to_float_or_zero(v: Any) -> float:
+    f = safe_float(v, default=None)
+    return 0.0 if f is None else f
 
 def actualizar_progresiones_individual(nombre, correo, ejercicio, circuito, bloque, fecha_actual_lunes, dia_numero, peso_alcanzado):
     db = firestore.client()
