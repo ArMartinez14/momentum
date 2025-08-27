@@ -94,3 +94,4 @@ def borrar_rutinas():
                 total_del += 1
         batch.commit()
         st.success(f"Se eliminaron {total_del} documento(s) de las semanas seleccionadas.")
+
