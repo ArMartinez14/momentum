@@ -50,6 +50,21 @@ MENSAJES_MOTIVACIONALES = [
     "🔥 {nombre}, sigue adelante. No te detengas. No te arrepientas.",
     "💥 {nombre}, levántate tantas veces como haga falta.",
 ]
+def _to_float_or_none(v):
+    try:
+        s = str(v).strip().replace(",", ".")
+        if s == "":
+            return None
+        if "-" in s:
+            s = s.split("-", 1)[0].strip()
+        return float(s)
+    except:
+        return None
+
+def _to_float_or_zero(v):
+    f = _to_float_or_none(v)
+    return 0.0 if f is None else f
+
 
 def mensaje_motivador_del_dia(nombre: str, correo_id: str) -> str:
     """
@@ -616,8 +631,10 @@ def ver_rutinas():
                     )
 
                     # Propaga delta de peso a semanas futuras
-                    peso_actual = float(e.get("peso", 0))
-                    delta = peso_alcanzado - peso_actual
+                    # Propaga delta de peso a semanas futuras (todo como float)
+                    peso_actual = _to_float_or_zero(e.get("peso"))
+                    delta = float(peso_alcanzado) - float(peso_actual)
+
                     if delta == 0:
                         continue
 
@@ -647,12 +664,9 @@ def ver_rutinas():
                             mismo_bloque    = (ef.get("bloque", ef.get("seccion", "")) == bloque)
 
                             if mismo_ejercicio and mismo_circuito and mismo_bloque:
-                                try:
-                                    base = ef.get("peso", 0)
-                                    base = 0 if base == "" else float(str(base).replace(",", "."))
-                                except Exception:
-                                    base = 0.0
+                                base = _to_float_or_zero(ef.get("peso"))
                                 ef["peso"] = round(base + float(delta), 2)
+
                                 ejercicios_fut[j] = ef
                                 changed = True
 
