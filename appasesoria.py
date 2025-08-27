@@ -2,6 +2,32 @@ import streamlit as st
 
 # ⚡️ 1) SIEMPRE primero:
 st.set_page_config(page_title="Momentum", layout="wide")
+# === Tema adaptativo (claro/oscuro): NO forzar colores fijos ===
+st.markdown("""
+<style>
+/* Texto y labels se adaptan al tema del sistema/navegador */
+@media (prefers-color-scheme: light) {
+  h1, h2, h3, h4, h5, h6, p, label, span, li,
+  div[data-testid="stMarkdownContainer"] {
+    color: #111111 !important;
+  }
+  input, textarea, select {
+    color: #111111 !important;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  h1, h2, h3, h4, h5, h6, p, label, span, li,
+  div[data-testid="stMarkdownContainer"] {
+    color: #ffffff !important;
+  }
+  input, textarea, select {
+    color: #ffffff !important;
+  }
+}
+</style>
+""", unsafe_allow_html=True)
+
 from seccion_ejercicios import base_ejercicios
 from vista_rutinas import ver_rutinas
 from borrar_rutinas import borrar_rutinas
@@ -93,11 +119,11 @@ opciones_menu = (
     "Inicio",
     "Ver Rutinas",
     "Crear Rutinas",
-    "Ingresar Deportista o Video",
+    "Ingresar Deportista o Ejercicio",
     "Borrar Rutinas",
     "Editar Rutinas",
     "Ejercicios",
-    "Descarga Rutina",
+    "Crear Descarga",
     "Reportes"  # 👈 Nueva opción
 )
 opcion = st.sidebar.radio("Selecciona una opción:", opciones_menu)
@@ -107,18 +133,18 @@ if opcion == "Inicio":
     
     st.markdown(f"""
         <div style='text-align: center; margin-top: 20px;'>
-            <img src='https://i.ibb.co/YL1HbLj/motion-logo.png' width='100'><br>
-            <h1 style="color:white; font-weight:bold;">
+            <img src='https://i.ibb.co/YL1HbLj/motion-logo.png' width='100' alt='Momentum Logo'><br>
+            <h1 style="font-weight: 800; margin: 8px 0;">
                 👋 Hola {primer_nombre}! — Bienvenido a Momentum
             </h1>
-            <p style='font-size:18px; color:white;'>Selecciona una opción del menú para comenzar</p>
+            <p style='font-size:18px; margin: 0;'>Selecciona una opción del menú para comenzar</p>
         </div>
         """, unsafe_allow_html=True)
 
 
 elif opcion == "Ver Rutinas":
     ver_rutinas()
-elif opcion == "Ingresar Deportista o Video":
+elif opcion == "Ingresar Deportista o Ejercicio":
     ingresar_cliente_o_video_o_ejercicio()
 elif opcion == "Borrar Rutinas":
     borrar_rutinas()
@@ -126,9 +152,29 @@ elif opcion == "Crear Rutinas":
     crear_rutinas()
 elif opcion == "Editar Rutinas":
     editar_rutinas()
-elif opcion == "Descarga Rutina":
+elif opcion == "Crear Descarga":
     descarga_rutina()
 elif opcion == "Ejercicios":
     base_ejercicios()
 elif opcion == "Reportes":
     ver_reportes()
+
+# appasesoria.py (fragmento)
+from admin_resumen import ver_resumen_entrenadores
+
+# ... tu código ...
+
+# Agrega la opción al menú
+opcion = st.sidebar.selectbox(
+    "Menú",
+    [
+        "Ver Rutinas",
+        "Crear Planificaciones",
+        "Ingresar Cliente / Video / Ejercicio",
+        # 👇 solo muéstralo si es admin
+        "Resumen (Admin)" if st.session_state.get("rol") == "admin" or st.session_state.get("correo","").lower() == st.secrets.get("ADMIN_EMAIL","").lower() else "—"
+    ]
+)
+
+if opcion == "Resumen (Admin)":
+    ver_resumen_entrenadores()
