@@ -1,4 +1,4 @@
-# guardar_rutina_view.py (o donde tengas esta función)
+# guardar_rutina_view.py
 from firebase_admin import firestore
 from datetime import timedelta
 from herramientas import aplicar_progresion, normalizar_texto, to_float_or_none
@@ -20,12 +20,12 @@ def aplicar_progresion_rango(valor_min, valor_max, cantidad, operacion):
             return valor
         return valor
 
-    nuevo_min = operar(valor_min, cantidad, operacion) if valor_min != "" else ""
-    nuevo_max = operar(valor_max, cantidad, operacion) if valor_max != "" else ""
+    nuevo_min = operar(valor_min, cantidad, operacion) if str(valor_min) != "" else ""
+    nuevo_max = operar(valor_max, cantidad, operacion) if str(valor_max) != "" else ""
     return nuevo_min, nuevo_max
 
 def _f(v):
-    """Convierte a float o None (no deja strings)."""
+    """Convierte a float o None. No deja strings."""
     try:
         s = str(v).strip().replace(",", ".")
         if s == "":
@@ -37,6 +37,10 @@ def _f(v):
     except:
         return None
 
+def _s(v):
+    """Sanea strings: None -> "", strip() y garantiza tipo str."""
+    return str(v or "").strip()
+
 def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, objetivo: str | None = None):
     db = firestore.client()
     bloque_id = str(uuid.uuid4())
@@ -46,20 +50,20 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
             fecha_semana = fecha_inicio + timedelta(weeks=semana)
             fecha_str = fecha_semana.strftime("%Y-%m-%d")
             fecha_norm = fecha_semana.strftime("%Y_%m_%d")
-            correo_norm = correo.strip().lower().replace("@", "_").replace(".", "_")
-            nombre_normalizado = normalizar_texto(nombre_sel.title())
+            correo_norm = _s(correo).lower().replace("@", "_").replace(".", "_")
+            nombre_normalizado = normalizar_texto(_s(nombre_sel).title())
 
             rutina_semana = {
                 "cliente": nombre_normalizado,
-                "correo": correo,
+                "correo": _s(correo),
                 "fecha_lunes": fecha_str,
-                "entrenador": entrenador,
+                "entrenador": _s(entrenador),
                 "bloque_rutina": bloque_id,
                 "rutina": {}
             }
 
-            if objetivo and str(objetivo).strip():
-                rutina_semana["objetivo"] = str(objetivo).strip()
+            if objetivo and _s(objetivo):
+                rutina_semana["objetivo"] = _s(objetivo)
 
             for i, dia_nombre in enumerate(dias):
                 numero_dia = str(i + 1)
@@ -70,12 +74,12 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                     ejercicios = st.session_state.get(dia_key, [])
 
                     for ejercicio in ejercicios:
-                        if not ejercicio.get("Ejercicio", "").strip():
+                        if not _s(ejercicio.get("Ejercicio", "")):
                             continue
 
                         ejercicio_mod = ejercicio.copy()
 
-                        # === APLICAR PROGRESIONES (igual que tenías) ===
+                        # === APLICAR PROGRESIONES (como tenías) ===
                         campos_progresion = {
                             "peso": "Peso",
                             "rir": "RIR",
@@ -86,27 +90,23 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                         for var_interna, var_real in campos_progresion.items():
                             if isinstance(var_real, tuple):
                                 min_key, max_key = var_real
-                                min_val = ejercicio.get(min_key, "")
-                                max_val = ejercicio.get(max_key, "")
                                 try:
-                                    min_val = int(min_val)
+                                    valor_min = int(ejercicio.get(min_key, ""))
                                 except:
-                                    min_val = ""
+                                    valor_min = ""
                                 try:
-                                    max_val = int(max_val)
+                                    valor_max = int(ejercicio.get(max_key, ""))
                                 except:
-                                    max_val = ""
-                                valor_min = min_val
-                                valor_max = max_val
+                                    valor_max = ""
                                 for p in range(1, 4):
-                                    var = ejercicio.get(f"Variable_{p}", "").strip().lower()
+                                    var = _s(ejercicio.get(f"Variable_{p}", "")).lower()
                                     cantidad = ejercicio.get(f"Cantidad_{p}", "")
-                                    operacion = ejercicio.get(f"Operacion_{p}", "").strip().lower()
+                                    operacion = _s(ejercicio.get(f"Operacion_{p}", "")).lower()
                                     semanas_txt = ejercicio.get(f"Semanas_{p}", "")
                                     if var != var_interna or not cantidad or not operacion:
                                         continue
                                     try:
-                                        semanas_aplicar = [int(s.strip()) for s in semanas_txt.split(",") if s.strip().isdigit()]
+                                        semanas_aplicar = [int(s.strip()) for s in _s(semanas_txt).split(",") if s.strip().isdigit()]
                                     except:
                                         semanas_aplicar = []
                                     for s in range(2, semana + 2):
@@ -116,19 +116,17 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                                 ejercicio_mod[max_key] = valor_max
                             else:
                                 valor_original = ejercicio.get(var_real, "")
-                                if not valor_original:
-                                    pass
-                                else:
+                                if valor_original != "":
                                     valor_actual = valor_original
                                     for p in range(1, 4):
-                                        var = ejercicio.get(f"Variable_{p}", "").strip().lower()
+                                        var = _s(ejercicio.get(f"Variable_{p}", "")).lower()
                                         cantidad = ejercicio.get(f"Cantidad_{p}", "")
-                                        operacion = ejercicio.get(f"Operacion_{p}", "").strip().lower()
+                                        operacion = _s(ejercicio.get(f"Operacion_{p}", "")).lower()
                                         semanas_txt = ejercicio.get(f"Semanas_{p}", "")
                                         if var != var_interna or not cantidad or not operacion:
                                             continue
                                         try:
-                                            semanas_aplicar = [int(s.strip()) for s in semanas_txt.split(",") if s.strip().isdigit()]
+                                            semanas_aplicar = [int(s.strip()) for s in _s(semanas_txt).split(",") if s.strip().isdigit()]
                                         except:
                                             semanas_aplicar = []
                                         for s in range(2, semana + 2):
@@ -136,27 +134,38 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                                                 valor_actual = aplicar_progresion(valor_actual, float(cantidad), operacion)
                                     ejercicio_mod[var_real] = valor_actual
 
-                        # === NORMALIZAR NUMÉRICOS (solo float/None) ANTES DE GUARDAR ===
+                        # === NORMALIZAR ANTES DE GUARDAR ===
+                        # Numéricos -> float o None
                         series     = _f(ejercicio_mod.get("Series", ""))
                         reps_min   = _f(ejercicio_mod.get("RepsMin", ""))
                         reps_max   = _f(ejercicio_mod.get("RepsMax", ""))
                         peso       = _f(ejercicio_mod.get("Peso", ""))
+                        tiempo     = _f(ejercicio_mod.get("Tiempo", ""))
+                        velocidad  = _f(ejercicio_mod.get("Velocidad", ""))
                         rir        = _f(ejercicio_mod.get("RIR", ""))
 
+                        # Strings saneados
+                        nombre_ej  = _s(ejercicio_mod.get("Ejercicio", ""))
+                        detalle    = _s(ejercicio_mod.get("Detalle", ""))
+                        tipo       = _s(ejercicio_mod.get("Tipo", ""))
+                        circuito   = _s(ejercicio_mod.get("Circuito", ""))
+                        bloque     = ejercicio_mod.get("Sección", seccion)
+                        video_link = _s(ejercicio_mod.get("Video", ""))
+
                         lista_ejercicios.append({
-                            "bloque":   ejercicio_mod.get("Sección", seccion),
-                            "circuito": ejercicio_mod.get("Circuito", ""),
-                            "ejercicio": ejercicio_mod.get("Ejercicio", ""),
-                            "detalle":  ejercicio_mod.get("Detalle", ""),
-                            "series":   series,
-                            "reps_min": reps_min,
-                            "reps_max": reps_max,
-                            "peso":     peso,
-                            "tiempo":   ejercicio_mod.get("Tiempo", ""),      # si quieres, también puedes normalizar
-                            "velocidad":ejercicio_mod.get("Velocidad", ""),   # si quieres, también puedes normalizar
-                            "rir":      rir,
-                            "tipo":     ejercicio_mod.get("Tipo", ""),
-                            "video":    ejercicio_mod.get("Video", "")
+                            "bloque":     bloque,
+                            "circuito":   circuito,
+                            "ejercicio":  nombre_ej,
+                            "detalle":    detalle,
+                            "series":     series,     # float | None
+                            "reps_min":   reps_min,   # float | None
+                            "reps_max":   reps_max,   # float | None
+                            "peso":       peso,       # float | None
+                            "tiempo":     tiempo,     # float | None
+                            "velocidad":  velocidad,  # float | None
+                            "rir":        rir,        # float | None
+                            "tipo":       tipo,
+                            "video":      video_link  # string limpio (o "")
                         })
 
                 if lista_ejercicios:
