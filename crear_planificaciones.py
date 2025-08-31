@@ -11,7 +11,7 @@ from herramientas import aplicar_progresion
 from guardar_rutina_view import guardar_rutina, aplicar_progresion_rango
 
 # Opcional si usas la barrera estricta en app.py
-from soft_login_strict import soft_login_barrier
+#from soft_login_strict import soft_login_barrier
 
 # ---------- utilidades básicas ----------
 def proximo_lunes(base: date | None = None) -> date:
