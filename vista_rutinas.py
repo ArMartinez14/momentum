@@ -7,6 +7,11 @@ from herramientas import actualizar_progresiones_individual
 import random
 from datetime import date
 
+from soft_login_full import soft_login_barrier
+
+soft_login_barrier(required_roles=["entrenador", "deportista", "admin"])
+# ... tu lógica para ver rutinas ...
+
 # ✅ Lista única (normales + anime, sin mencionar series/personajes)
 MENSAJES_MOTIVACIONALES = [
     # Base normales
@@ -22,33 +27,23 @@ MENSAJES_MOTIVACIONALES = [
     "💥 {nombre}, el esfuerzo de hoy es el resultado de mañana.",
 
     # Frases de inspiración anime (sin referencias)
-    "💥 {nombre}, el poder viene en respuesta a una necesidad, no a un deseo.",
     "⚡ {nombre}, supera tus límites ahora mismo.",
     "🔥 {nombre}, no rendirse es tu especialidad.",
     "🍃 {nombre}, jamás te rindas.",
-    "🔥 {nombre}, el trabajo duro es inútil para quien no cree en sí mismo.",
-    "🌀 {nombre}, los fracasos enseñan cosas que el éxito no.",
-    "☠️ {nombre}, no importa cuán difícil se ponga, nunca retrocedas.",
-    "🌊 {nombre}, los sueños nunca terminan.",
-    "🔥 {nombre}, los sueños de los hombres nunca mueren.",
-    "💥 {nombre}, un héroe sonríe incluso cuando tiene el corazón hecho pedazos.",
-    "🌟 {nombre}, más allá de los límites, Plus Ultra.",
-    "⚡ {nombre}, conviértete en el héroe que quieres ser.",
-    "🛡️ {nombre}, si ganas, vives. Si pierdes, mueres. Si no luchas, no puedes ganar.",
-    "⚔️ {nombre}, el mundo es cruel… pero también es muy hermoso.",
-    "🔥 {nombre}, la única cosa que puedes hacer es no arrepentirte de tu elección.",
-    "🏹 {nombre}, si vas a arriesgar tu vida, necesitas una razón.",
-    "🌌 {nombre}, no te rindas pase lo que pase.",
-    "💥 {nombre}, el deseo y la determinación mueven al cuerpo más allá de sus límites.",
-    "⚔️ {nombre}, el miedo no es malo; te muestra dónde debes mejorar.",
-    "🔥 {nombre}, si quieres vencer, aprende primero a soportar.",
-    "🌌 {nombre}, protégente a ti mismo para poder proteger a otros.",
-    "🔥 {nombre}, tu corazón es tu espada.",
-    "🌙 {nombre}, no te detengas. Respira, concéntrate y avanza.",
-    "⚔️ {nombre}, la determinación enciende un fuego que ni la noche apaga.",
-    "⚖️ {nombre}, para obtener algo, algo de igual valor debe perderse.",
-    "🔥 {nombre}, sigue adelante. No te detengas. No te arrepientas.",
-    "💥 {nombre}, levántate tantas veces como haga falta.",
+    "🔥 {nombre}, cada repetición es un paso más cerca de tu mejor versión.",
+    "🏋️ {nombre}, los límites están en tu mente, el cuerpo puede más.",
+    "🔥 {nombre}, no pares cuando estés cansado, para cuando hayas terminado.",
+    "💪 {nombre}, cada gota de sudor es inversión en tu rendimiento.",
+    "🚀 {nombre}, cada serie cuenta, cada día suma. ¡Hazlo grande!",
+    "🔥 {nombre}, la incomodidad es la señal de que estás creciendo.",
+    "🏹 {nombre}, entrena como si fueras a competir contra tu mejor versión.",
+    "🌌 {nombre}, si quieres resultados distintos, exige más de ti mismo.",
+    "💥 {nombre}, la fuerza no viene de lo que puedes hacer, sino de lo que superas.",
+    "🔥 {nombre}, hoy es el día perfecto para superar tu récord.",
+    "🔥 {nombre}, tu cuerpo puede aguantar más de lo que tu mente cree.",
+    "⚔️ {nombre}, cada levantamiento es una batalla, ¡gánala!",
+    "🔥 {nombre}, no esperes motivación, crea disciplina en cada serie.",
+    "💪 {nombre}, los campeones se forman cuando nadie los ve entrenar.",
 ]
 def _to_float_or_none(v):
     try:
