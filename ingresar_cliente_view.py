@@ -18,25 +18,20 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 def normalizar_id(correo: str) -> str:
-    # ID para Firestore (mantén la política actual)
     return (correo or "").replace('@', '_').replace('.', '_')
 
 def normalizar_texto(texto: str) -> str:
     return unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('utf-8').lower().replace(" ", "_")
 
-# === NUEVO: normalización fuerte de correo (quita espacios y pone minúsculas) ===
+# === normalización fuerte de correo ===
 import re as _re
 def normalizar_correo(correo: str) -> str:
-    """
-    - Elimina TODOS los espacios (incluye Unicode y NBSP).
-    - Convierte a minúsculas con casefold().
-    """
     if not correo:
         return ""
     c = str(correo)
-    c = c.replace("\u00A0", "")                       # NBSP
-    c = _re.sub(r"\s+", "", c, flags=_re.UNICODE)    # cualquier whitespace
-    c = c.casefold()                                  # minúsculas robustas
+    c = c.replace("\u00A0", "")
+    c = _re.sub(r"\s+", "", c, flags=_re.UNICODE)
+    c = c.casefold()
     return c
 
 # ====== detectar si el usuario actual es admin ======
@@ -117,18 +112,15 @@ def ingresar_cliente_o_video_o_ejercicio():
     if opcion == "Cliente Nuevo":
         nombre = st.text_input("Nombre del cliente:")
 
-        # Antes de dibujar el input, si ya hay valor en session_state, lo normalizamos
         if "correo_cliente_nuevo" in st.session_state:
             st.session_state["correo_cliente_nuevo"] = normalizar_correo(st.session_state["correo_cliente_nuevo"])
 
-        # 🔧 input con limpieza automática al salir del foco / Enter
         correo_input = st.text_input(
             "Correo del cliente:",
             key="correo_cliente_nuevo",
             on_change=_cb_normalizar_correo,
             args=("correo_cliente_nuevo",)
         )
-        # el valor ya está normalizado en session_state
         correo_limpio = st.session_state.get("correo_cliente_nuevo", "")
 
         if correo_input:
@@ -146,14 +138,11 @@ def ingresar_cliente_o_video_o_ejercicio():
                 st.warning("⚠️ Ingresa el nombre.")
                 return
 
-            # 🔧 usar SIEMPRE el correo normalizado
             correo_limpio = normalizar_correo(correo_input)
-
             if not correo_limpio:
                 st.warning("⚠️ Ingresa el correo.")
                 return
 
-            # Validación de formato
             patron_correo = r"^[^\s@]+@[^\s@]+\.[^\s@]+$"
             if not re.match(patron_correo, correo_limpio):
                 st.warning("⚠️ El correo no parece válido. Revisa el formato (ej: nombre@dominio.com).")
@@ -163,7 +152,6 @@ def ingresar_cliente_o_video_o_ejercicio():
                 st.warning("⚠️ Selecciona el rol.")
                 return
 
-            # doc_id también basado en correo limpio
             doc_id = normalizar_id(correo_limpio)
             data = {"nombre": nombre, "correo": correo_limpio, "rol": rol}
 
@@ -177,7 +165,7 @@ def ingresar_cliente_o_video_o_ejercicio():
     elif opcion == "Ejercicio Nuevo o Editar":
         st.subheader("📌 Crear o Editar Ejercicio")
 
-        # Identidad del usuario (necesaria para marcar 'entrenador')
+        # Identidad del usuario (para 'entrenador' y permisos)
         correo_usuario = (st.session_state.get("correo") or "").strip().lower()
         if not correo_usuario:
             st.warning("Primero ingresa tu correo en la app (st.session_state['correo']).")
@@ -199,7 +187,7 @@ def ingresar_cliente_o_video_o_ejercicio():
             snap = db.collection("ejercicios").document(doc_id_sel).get()
             datos = snap.to_dict() if snap.exists else {}
 
-        # === catálogos centralizados ===
+        # === catálogos ===
         cat = get_catalogos()
         catalogo_carac  = cat.get("caracteristicas", [])
         catalogo_patron = cat.get("patrones_movimiento", [])
@@ -238,11 +226,10 @@ def ingresar_cliente_o_video_o_ejercicio():
         nombre_ej = f"{implemento.strip()} {detalle.strip()}".strip()
         st.text_input("Nombre completo del ejercicio:", value=nombre_ej, key="nombre", disabled=True)
 
-        # (opcional) permitir a admin decidir visibilidad
-        if admin:
-            publico_admin = st.checkbox("Hacer público (visible para todos los entrenadores)", value=True)
-        else:
-            publico_admin = False  # ignorado para no-admin
+        # ✅ Checkbox visible para TODOS (entrenador o admin). Por defecto:
+        #    - admin: True  | entrenador: False
+        publico_default = True if admin else False
+        publico_check = st.checkbox("Hacer público (visible para todos los entrenadores)", value=publico_default)
 
         if st.button("💾 Guardar Ejercicio", key="btn_guardar_ejercicio"):
             if not nombre_ej:
@@ -258,7 +245,14 @@ def ingresar_cliente_o_video_o_ejercicio():
                 "patron_de_movimiento": patron,
                 "actualizado_por": correo_usuario,
                 "fecha_actualizacion": datetime.utcnow(),
+                # 👇 Gobernado SOLO por el checkbox (si está activo, queda True independiente del rol)
+                "publico": bool(publico_check),
             }
+
+            # Reglas solicitadas:
+            # - Si NO está marcado y el usuario es entrenador => publico False (ya lo cumple por defecto).
+            # - Si NO está marcado y es admin => publico False (puede crear privados).
+            # - Si está marcado => publico True para cualquiera.
 
             # Validaciones mínimas
             faltantes = [k for k, v in {
@@ -271,16 +265,13 @@ def ingresar_cliente_o_video_o_ejercicio():
                 st.warning("⚠️ Completa: " + ", ".join(faltantes))
                 return
 
-            # Visibilidad según rol
-            if admin:
-                datos_guardar["publico"] = True if publico_admin else False
-            else:
-                datos_guardar["publico"] = False
-                datos_guardar["entrenador"] = correo_usuario
-
             try:
-                # Si es edición: conservar el mismo doc_id.
                 if modo == "Editar ejercicio existente" and doc_id_sel:
+                    # Mantener 'entrenador' original si existe; si no existe, lo ponemos
+                    entrenador_original = datos.get("entrenador")
+                    if not entrenador_original:
+                        datos_guardar["entrenador"] = correo_usuario  # backfill si faltaba
+                    # Actualizar
                     db.collection("ejercicios").document(doc_id_sel).update(datos_guardar)
                     st.success(f"✅ Ejercicio '{datos.get('nombre', doc_id_sel)}' actualizado correctamente")
                 else:
@@ -288,22 +279,23 @@ def ingresar_cliente_o_video_o_ejercicio():
                     doc_id = normalizar_texto(nombre_ej)
                     db.collection("ejercicios").document(doc_id).set({
                         **datos_guardar,
+                        # 👇 creador del ejercicio
                         "creado_por": correo_usuario,
                         "fecha_creacion": datetime.utcnow(),
+                        # 👇 correo del entrenador que LO CREÓ (aunque sea admin, guardamos aquí)
+                        "entrenador": correo_usuario,
                     }, merge=True)
                     st.success(f"✅ Ejercicio '{nombre_ej}' guardado correctamente")
 
                 # Mensaje de visibilidad
-                if admin:
-                    if datos_guardar["publico"]:
-                        st.info("Este ejercicio es **público** y será visible para todos los entrenadores.")
-                    else:
-                        st.info("Este ejercicio está **no público**.")
+                if datos_guardar["publico"]:
+                    st.info("Este ejercicio es **público** y será visible para todos los entrenadores.")
                 else:
-                    st.info("Este ejercicio será visible **solo para ti** en Crear Rutina.")
+                    st.info("Este ejercicio está **no público** (solo lo verás tú en Crear Rutina si no eres admin).")
 
             except Exception as e:
                 st.error(f"❌ Error al guardar: {e}")
 
     else:
         st.info("👈 Selecciona una opción para comenzar.")
+
