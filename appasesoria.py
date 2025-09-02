@@ -1,32 +1,16 @@
+# app.py
 import streamlit as st
 
-# ⚡️ 1) SIEMPRE primero:
-st.set_page_config(page_title="Momentum", layout="wide")
-# === Tema adaptativo (claro/oscuro): NO forzar colores fijos ===
-st.markdown("""
-<style>
-/* Texto y labels se adaptan al tema del sistema/navegador */
-@media (prefers-color-scheme: light) {
-  h1, h2, h3, h4, h5, h6, p, label, span, li,
-  div[data-testid="stMarkdownContainer"] {
-    color: #111111 !important;
-  }
-  input, textarea, select {
-    color: #111111 !important;
-  }
-}
+# 1) SIEMPRE PRIMERO
+st.set_page_config(page_title="Aplicación Asesorías", layout="wide")
 
-@media (prefers-color-scheme: dark) {
-  h1, h2, h3, h4, h5, h6, p, label, span, li,
-  div[data-testid="stMarkdownContainer"] {
-    color: #ffffff !important;
-  }
-  input, textarea, select {
-    color: #ffffff !important;
-  }
-}
-</style>
-""", unsafe_allow_html=True)
+# 2) Soft login (usa el módulo que ya probaste)
+from soft_login_full import soft_login_barrier, soft_logout
+
+# 3) Imports del resto de la app
+import json
+import firebase_admin
+from firebase_admin import credentials, firestore, initialize_app
 
 from seccion_ejercicios import base_ejercicios
 from vista_rutinas import ver_rutinas
@@ -36,101 +20,78 @@ from crear_planificaciones import crear_rutinas
 from editar_rutinas import editar_rutinas
 from crear_descarga import descarga_rutina
 from reportes import ver_reportes
+from admin_resumen import ver_resumen_entrenadores  # si no lo usas, puedes comentar
 
-import firebase_admin
-from firebase_admin import credentials, firestore, initialize_app
-import json   # 👈 importante para leer el secreto
+# 4) Estilos (opcional)
+st.markdown("""
+<style>
+@media (prefers-color-scheme: light) {
+  h1, h2, h3, h4, h5, h6, p, label, span, li,
+  div[data-testid="stMarkdownContainer"] { color: #111111 !important; }
+  input, textarea, select { color: #111111 !important; }
+}
+@media (prefers-color-scheme: dark) {
+  h1, h2, h3, h4, h5, h6, p, label, span, li,
+  div[data-testid="stMarkdownContainer"] { color: #ffffff !important; }
+  input, textarea, select { color: #ffffff !important; }
+}
+</style>
+""", unsafe_allow_html=True)
 
-
-# === INICIALIZAR FIREBASE desde Secrets ===
+# 5) Inicializar Firebase (una sola vez)
 if not firebase_admin._apps:
     cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
     cred = credentials.Certificate(cred_dict)
     initialize_app(cred)
-
 db = firestore.client()
 
-# === Estado ===
-if "correo" not in st.session_state:
-    st.session_state.correo = ""
-if "rol" not in st.session_state:
-    st.session_state.rol = ""
-# 👇 nuevos estados para el saludo
-if "nombre_completo" not in st.session_state:
-    st.session_state.nombre_completo = ""
-if "primer_nombre" not in st.session_state:
-    st.session_state.primer_nombre = ""
-
-def extraer_primer_nombre(nombre: str, correo: str) -> str:
-    """
-    Devuelve el primer nombre a partir del campo 'nombre'.
-    Si viene vacío o None, usa la parte antes de la @ del correo.
-    """
-    try:
-        if nombre and isinstance(nombre, str):
-            # divide por espacios y toma el primer token no vacío
-            tokens = [t for t in nombre.strip().split() if t]
-            if tokens:
-                return tokens[0]
-        # Fallback: parte del correo antes de la @, capitalizada
-        user = (correo.split("@")[0] if correo else "Usuario").replace(".", " ").strip()
-        return user.title()
-    except Exception:
-        return "Usuario"
-
-# === 1️⃣ LOGIN obligatorio ===
-if not st.session_state.correo:
-    st.title("Bienvenido a Momentum")
-    correo_input = st.text_input("Por favor, ingresa tu correo:")
-
-    if correo_input:
-        docs = db.collection("usuarios").where("correo", "==", correo_input).limit(1).stream()
-        usuario = None
-        for doc in docs:
-            usuario = doc.to_dict()
-            break
-
-        if usuario:
-            st.session_state.correo = correo_input
-            st.session_state.rol = usuario.get("rol", "").lower()
-            st.session_state.nombre_completo = usuario.get("nombre", "") or ""
-            st.session_state.primer_nombre = extraer_primer_nombre(
-                st.session_state.nombre_completo, st.session_state.correo
-            )
-
-            # Mensaje de bienvenida con saludo personalizado
-            st.success(f"👋 Hola {st.session_state.primer_nombre}. Bienvenido, {st.session_state.rol.title()} ✅")
-            st.rerun()
-        else:
-            st.error("Correo no encontrado. Verifica o contacta al administrador.")
+# 6) Barrera de Soft Login (persistente con cookie)
+#    Cambia required_roles si quieres restringir el ingreso a ciertos roles globalmente.
+if not soft_login_barrier(titulo="Bienvenido a Momentum", required_roles=None):
     st.stop()
 
-# === 2️⃣ Deportista: va directo a ver rutina (con saludo) ===
-if st.session_state.rol == "deportista":
-    if st.session_state.primer_nombre:
-        st.markdown(f"### 👋 Hola {st.session_state.primer_nombre}")
+# 7) Barra lateral: estado + logout
+email = st.session_state.get("correo", "")
+rol = (st.session_state.get("rol") or "").lower()
+st.sidebar.success(f"Conectado: {email} ({rol})")
+if st.sidebar.button("Cerrar sesión", key="btn_logout"):
+    soft_logout()
+
+# 8) Enrutamiento según rol
+if rol == "deportista":
+    # Vista simplificada: solo puede ver rutinas
+    st.title("🏋️ Tu Rutina")
     ver_rutinas()
     st.stop()
 
-# === 3️⃣ Menu para admin/entrenador ===
+# 9) Menú para entrenador/admin
 st.sidebar.title("Menú principal")
-
-opciones_menu = (
+opciones_menu = [
     "Inicio",
     "Ver Rutinas",
-    "Crear Rutinas",
+    "Crear Rutinas",                 # 🔒 entrenador/admin
     "Ingresar Deportista o Ejercicio",
     "Borrar Rutinas",
     "Editar Rutinas",
     "Ejercicios",
     "Crear Descarga",
-    "Reportes"  # 👈 Nueva opción
-)
-opcion = st.sidebar.radio("Selecciona una opción:", opciones_menu)
+    "Reportes",
+]
 
+# Opción extra solo para admin/Administrador
+is_admin = rol in ("admin", "administrador") or (
+    email and st.secrets.get("ADMIN_EMAIL", "").lower() == email.lower()
+)
+if is_admin:
+    opciones_menu.append("Resumen (Admin)")
+
+opcion = st.sidebar.radio("Selecciona una opción:", opciones_menu, index=0)
+
+# 10) Vistas
 if opcion == "Inicio":
-    primer_nombre = st.session_state.primer_nombre or "Usuario"
-    
+    primer_nombre = st.session_state.get("primer_nombre") or (
+        email.split("@")[0].title() if email else "Usuario"
+    )
     st.markdown(f"""
         <div style='text-align: center; margin-top: 20px;'>
             <img src='https://i.ibb.co/YL1HbLj/motion-logo.png' width='100' alt='Momentum Logo'><br>
@@ -141,40 +102,36 @@ if opcion == "Inicio":
         </div>
         """, unsafe_allow_html=True)
 
-
 elif opcion == "Ver Rutinas":
     ver_rutinas()
+
+elif opcion == "Crear Rutinas":
+    # 🔒 Solo entrenador/admin
+    if rol in ("entrenador", "admin", "administrador"):
+        crear_rutinas()
+    else:
+        st.warning("No tienes permisos para crear rutinas.")
+
 elif opcion == "Ingresar Deportista o Ejercicio":
     ingresar_cliente_o_video_o_ejercicio()
+
 elif opcion == "Borrar Rutinas":
     borrar_rutinas()
-elif opcion == "Crear Rutinas":
-    crear_rutinas()
+
 elif opcion == "Editar Rutinas":
     editar_rutinas()
-elif opcion == "Crear Descarga":
-    descarga_rutina()
+
 elif opcion == "Ejercicios":
     base_ejercicios()
+
+elif opcion == "Crear Descarga":
+    descarga_rutina()
+
 elif opcion == "Reportes":
     ver_reportes()
 
-# appasesoria.py (fragmento)
-from admin_resumen import ver_resumen_entrenadores
-
-# ... tu código ...
-
-# Agrega la opción al menú
-opcion = st.sidebar.selectbox(
-    "Menú",
-    [
-        "Ver Rutinas",
-        "Crear Planificaciones",
-        "Ingresar Cliente / Video / Ejercicio",
-        # 👇 solo muéstralo si es admin
-        "Resumen (Admin)" if st.session_state.get("rol") == "admin" or st.session_state.get("correo","").lower() == st.secrets.get("ADMIN_EMAIL","").lower() else "—"
-    ]
-)
-
-if opcion == "Resumen (Admin)":
-    ver_resumen_entrenadores()
+elif opcion == "Resumen (Admin)":
+    if is_admin:
+        ver_resumen_entrenadores()
+    else:
+        st.warning("Solo disponible para administradores.")
