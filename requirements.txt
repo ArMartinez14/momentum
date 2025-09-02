@@ -69,3 +69,6 @@ tzdata==2025.2
 uritemplate==4.2.0
 urllib3==2.5.0
 matplotlib
+extra-streamlit-components==0.1.60
+itsdangerous==2.1.2
+
