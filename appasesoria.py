@@ -4,25 +4,22 @@ import streamlit as st
 # 1) SIEMPRE PRIMERO
 st.set_page_config(page_title="Aplicación Asesorías", layout="wide")
 
-# 2) Soft login (usa el módulo que ya probaste)
+# 2) Soft login
 from soft_login_full import soft_login_barrier, soft_logout
 
-# 3) Imports del resto de la app
+# 3) Firebase
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app
 
-from seccion_ejercicios import base_ejercicios
-from vista_rutinas import ver_rutinas
-from borrar_rutinas import borrar_rutinas
-from ingresar_cliente_view import ingresar_cliente_o_video_o_ejercicio
-from crear_planificaciones import crear_rutinas
-from editar_rutinas import editar_rutinas
-from crear_descarga import descarga_rutina
-from reportes import ver_reportes
-from admin_resumen import ver_resumen_entrenadores  # si no lo usas, puedes comentar
+# 4) Router por rol
+from rol_router import set_role_adapter, run_feature, can, ROL_ADMIN, ROL_ENTRENADOR, ROL_DEPORTISTA
 
-# 4) Estilos (opcional)
+# 5) Registrar implementaciones de features de esta app (IMPORTANTE)
+#    Este import realiza el registro (@exponer) de todas las features.
+import funciones_asesoria  # noqa: F401
+
+# ===== Estilos (opcional) =====
 st.markdown("""
 <style>
 @media (prefers-color-scheme: light) {
@@ -38,56 +35,71 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 5) Inicializar Firebase (una sola vez)
+# ===== Firebase (una sola vez) =====
 if not firebase_admin._apps:
     cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
     cred = credentials.Certificate(cred_dict)
     initialize_app(cred)
 db = firestore.client()
 
-# 6) Barrera de Soft Login (persistente con cookie)
-#    Cambia required_roles si quieres restringir el ingreso a ciertos roles globalmente.
+# ===== Soft login barrier =====
+# Nota: si en tu flujo el login no requiere roles para mostrar la home, deja required_roles=None
 if not soft_login_barrier(titulo="Bienvenido a Momentum", required_roles=None):
     st.stop()
 
-# 7) Barra lateral: estado + logout
+# ===== Estado lateral + logout =====
 email = st.session_state.get("correo", "")
 rol = (st.session_state.get("rol") or "").lower()
 st.sidebar.success(f"Conectado: {email} ({rol})")
 if st.sidebar.button("Cerrar sesión", key="btn_logout"):
     soft_logout()
 
-# 8) Enrutamiento según rol
-if rol == "deportista":
-    # Vista simplificada: solo puede ver rutinas
+# ===== Conectar el router a tu rol actual =====
+def _resolver_rol_actual():
+    return (st.session_state.get("rol") or "").lower()
+set_role_adapter(_resolver_rol_actual)
+
+# ===== Helper para ejecutar features con captura de errores =====
+def run_safe(feature_name: str):
+    try:
+        run_feature(feature_name)
+    except Exception as e:
+        st.error(f"Ocurrió un error al cargar la sección: {feature_name}")
+        st.exception(e)
+
+# ===== Home si es deportista (directo a ver rutinas) =====
+if rol == ROL_DEPORTISTA:
     st.title("🏋️ Tu Rutina")
-    ver_rutinas()
+    run_safe("ver_rutinas")
     st.stop()
 
-# 9) Menú para entrenador/admin
+# ===== Menú dinámico según permisos =====
 st.sidebar.title("Menú principal")
-opciones_menu = [
-    "Inicio",
-    "Ver Rutinas",
-    "Crear Rutinas",                 # 🔒 entrenador/admin
-    "Ingresar Deportista o Ejercicio",
-    "Borrar Rutinas",
-    "Editar Rutinas",
-    "Ejercicios",
-    "Crear Descarga",
-    "Reportes",
+
+# Mapeo de etiquetas -> feature
+MENU_ITEMS = [
+    ("Inicio", None),
+    ("Ver Rutinas", "ver_rutinas"),
+    ("Crear Rutinas", "crear_rutinas"),
+    ("Ingresar Deportista o Ejercicio", "gestionar_clientes"),
+    ("Borrar Rutinas", None),             # sigue “local” (si quieres, llévalo al router)
+    ("Editar Rutinas", "editar_rutinas"),
+    ("Ejercicios", "ejercicios"),
+    ("Crear Descarga", "descargar_rutinas"),
+    ("Reportes", "ver_reportes"),
+    ("Resumen (Admin)", "resumen_admin"),
 ]
 
-# Opción extra solo para admin/Administrador
-is_admin = rol in ("admin", "administrador") or (
-    email and st.secrets.get("ADMIN_EMAIL", "").lower() == email.lower()
-)
-if is_admin:
-    opciones_menu.append("Resumen (Admin)")
+# Filtrar items por permisos del rol actual (si tiene feature/capability)
+def visible_for_role(label: str, feature: str | None) -> bool:
+    if feature is None:
+        return True
+    return can(rol, feature)
 
-opcion = st.sidebar.radio("Selecciona una opción:", opciones_menu, index=0)
+menu_labels = [lbl for (lbl, feat) in MENU_ITEMS if visible_for_role(lbl, feat)]
+opcion = st.sidebar.radio("Selecciona una opción:", menu_labels, index=0)
 
-# 10) Vistas
+# ===== Render según selección =====
 if opcion == "Inicio":
     primer_nombre = st.session_state.get("primer_nombre") or (
         email.split("@")[0].title() if email else "Usuario"
@@ -103,35 +115,34 @@ if opcion == "Inicio":
         """, unsafe_allow_html=True)
 
 elif opcion == "Ver Rutinas":
-    ver_rutinas()
+    run_safe("ver_rutinas")
 
 elif opcion == "Crear Rutinas":
-    # 🔒 Solo entrenador/admin
-    if rol in ("entrenador", "admin", "administrador"):
-        crear_rutinas()
-    else:
-        st.warning("No tienes permisos para crear rutinas.")
+    run_safe("crear_rutinas")
 
 elif opcion == "Ingresar Deportista o Ejercicio":
-    ingresar_cliente_o_video_o_ejercicio()
+    run_safe("gestionar_clientes")
 
 elif opcion == "Borrar Rutinas":
-    borrar_rutinas()
+    # “Local”: no pasa por router aún
+    from borrar_rutinas import borrar_rutinas
+    try:
+        borrar_rutinas()
+    except Exception as e:
+        st.error("No se pudo cargar Borrar Rutinas.")
+        st.exception(e)
 
 elif opcion == "Editar Rutinas":
-    editar_rutinas()
+    run_safe("editar_rutinas")
 
 elif opcion == "Ejercicios":
-    base_ejercicios()
+    run_safe("ejercicios")
 
 elif opcion == "Crear Descarga":
-    descarga_rutina()
+    run_safe("descargar_rutinas")
 
 elif opcion == "Reportes":
-    ver_reportes()
+    run_safe("ver_reportes")
 
 elif opcion == "Resumen (Admin)":
-    if is_admin:
-        ver_resumen_entrenadores()
-    else:
-        st.warning("Solo disponible para administradores.")
+    run_safe("resumen_admin")
