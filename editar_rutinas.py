@@ -630,6 +630,7 @@ def editar_rutinas():
 
             st.success(f"✅ Cambios aplicados en {total} semana(s) (incluida la actual).")
 
-# Para ejecución directa en Streamlit multipage
+# Para ejecuciónes directa en Streamlit multipage
 if __name__ == "__main__":
     editar_rutinas()
+
