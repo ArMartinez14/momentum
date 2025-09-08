@@ -473,9 +473,8 @@ def ver_rutinas():
                     st.session_state["dia_sel"] = str(dia)
                     st.rerun()
                 st.markdown(
-                    "<span class='badge {cls}'>{txt}</span>".format(
+                    "<span class='badge {cls}'></span>".format(
                         cls=("badge--success" if finalizado else "badge--pending"),
-                        txt=("Completado" if finalizado else "Pendiente")
                     ),
                     unsafe_allow_html=True
                 )
