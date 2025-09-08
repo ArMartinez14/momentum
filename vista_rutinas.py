@@ -264,6 +264,24 @@ def _preparar_ejercicio_para_guardado(e: dict, correo_actor: str) -> dict:
     if "bloque" not in e: e["bloque"] = e.get("seccion","")
     return e
 
+# --- NUEVO: helpers para meta y comparación de pesos ---
+def _peso_prescrito_float(e: dict) -> float:
+    try:
+        return float(str(e.get("peso","")).replace(",", "."))
+    except:
+        return 0.0
+
+def _es_ultimo_dia_pendiente(doc: dict, dia_sel: str) -> bool:
+    rutina = (doc.get("rutina") or {})
+    dias = _dias_numericos(rutina)
+    if not dias: return False
+    for d in dias:
+        if str(d) == str(dia_sel):
+            continue
+        if rutina.get(f"{d}_finalizado") is not True:
+            return False
+    return True
+
 def guardar_reporte_ejercicio(db, correo_cliente_norm, semana_sel, dia_sel, ejercicio_editado):
     fecha_norm = semana_sel.replace("-", "_")
     doc_id = f"{correo_cliente_norm}_{fecha_norm}"
@@ -282,36 +300,75 @@ def guardar_reporte_ejercicio(db, correo_cliente_norm, semana_sel, dia_sel, ejer
     doc_ref.set({"rutina": {dia_sel: ejercicios_lista}}, merge=True); return True
 
 def guardar_reportes_del_dia(db, correo_cliente_norm, semana_sel, dia_sel, ejercicios, correo_actor, rpe_valor):
+    """
+    Devuelve (ok: bool, meta: dict) con:
+      - meta['era_ultimo_dia'] -> bool
+      - meta['subidas_peso']   -> int (cuántos ejercicios superaron el peso prescrito)
+    """
     dia_sel = str(dia_sel)
     fecha_norm = semana_sel.replace("-", "_")
     doc_id = f"{correo_cliente_norm}_{fecha_norm}"
     doc_ref = db.collection("rutinas_semanales").document(doc_id)
     doc = doc_ref.get()
+
+    # ¿Era el último día pendiente antes de finalizar?
+    era_ultimo_dia = False
+    if doc.exists:
+        era_ultimo_dia = _es_ultimo_dia_pendiente(doc.to_dict(), dia_sel)
+
     ejercicios_guardados = []
     if doc.exists:
         rutina = doc.to_dict().get("rutina", {})
         ejercicios_raw = rutina.get(dia_sel, [])
         ejercicios_guardados = obtener_lista_ejercicios(ejercicios_raw)
+
     def _key_ex(e: dict):
         return ((e.get("bloque") or e.get("seccion") or "").strip().lower(),
                 (e.get("circuito") or "").strip().upper(),
                 (e.get("ejercicio") or "").strip().lower())
+
     idx_guardados = {_key_ex(e): e for e in ejercicios_guardados if isinstance(e, dict)}
+
+    subidas_peso = 0
+
     for e in ejercicios:
-        if not isinstance(e, dict): continue
+        if not isinstance(e, dict): 
+            continue
         key = _key_ex(e)
         ex_prev = idx_guardados.get(key)
-        if ex_prev and _tiene_reporte_guardado(ex_prev): continue
+        if ex_prev and _tiene_reporte_guardado(ex_prev):
+            # Ya tenía un reporte con datos, no lo pisamos
+            continue
+
         e2 = _preparar_ejercicio_para_guardado(dict(e), correo_actor)
+
+        # Comparación: peso alcanzado (máximo en series) vs peso prescrito
+        peso_prescrito = _peso_prescrito_float(e)
+        peso_alc = e2.get("peso_alcanzado", None)
+        if peso_alc is None:
+            pa, _, _ = _parsear_series(e2.get("series_data", []))
+            peso_alc = pa
+
+        try:
+            if (peso_alc is not None) and (float(peso_alc) > (peso_prescrito + 1e-9)):
+                subidas_peso += 1
+        except:
+            pass
+
         ok = guardar_reporte_ejercicio(db=db, correo_cliente_norm=correo_cliente_norm,
                                        semana_sel=semana_sel, dia_sel=dia_sel, ejercicio_editado=e2)
-        if not ok: return False
+        if not ok:
+            return False, {"era_ultimo_dia": era_ultimo_dia, "subidas_peso": subidas_peso}
+
+    # Marcar finalización del día + RPE
     updates = {"rutina": {f"{dia_sel}_finalizado": True,
                           f"{dia_sel}_finalizado_por": correo_actor,
                           f"{dia_sel}_finalizado_en": firestore.SERVER_TIMESTAMP}}
     if rpe_valor is not None:
         updates["rutina"][f"{dia_sel}_rpe"] = float(rpe_valor)
-    doc_ref.set(updates, merge=True); return True
+    doc_ref.set(updates, merge=True)
+
+    return True, {"era_ultimo_dia": era_ultimo_dia, "subidas_peso": subidas_peso}
 
 # ==========================
 #  PNG Resumen
@@ -349,6 +406,23 @@ def generar_tarjeta_resumen_sesion(nombre, dia_indice, ejercicios_workout, focus
     fig.tight_layout(); return fig
 
 # ==========================
+#  MENSAJES ALEATORIOS (Caso 1 y Caso 2)
+# ==========================
+MENSAJES_SEMANA_COMPLETA = [
+    "🏆 Has completado cada sesión de esta semana. ¡Sigue construyendo tu mejor versión!",
+    "🔥 Semana terminada con todas tus sesiones cumplidas. Estás moldeando tu mejor versión, paso a paso.",
+    "👏 Cerraste la semana completa. Esa disciplina es la base para seguir creciendo hacia tu mejor versión.",
+    "🌟 Cada día de entrenamiento cumplido suma. Hoy alcanzaste el 100% de tu semana. ¡Imparable en tu camino hacia tu mejor versión!"
+]
+
+MENSAJES_SUBIDA_PESO = [
+    "💪 Bien por ese esfuerzo extra, sigue rompiendo tus límites paso a paso.",
+    "🔥 Excelente ese esfuerzo extra. Cada kilo de más es una señal de que estás rompiendo tus propios límites.",
+    "🚀 Ese extra que diste hoy demuestra tu progreso. ¡Bien por atreverte y seguir superando tus límites!",
+    "🙌 Bien hecho con ese esfuerzo adicional. Estás empujando tus propios límites cada vez más."
+]
+
+# ==========================
 #  VISTA
 # ==========================
 def ver_rutinas():
@@ -364,6 +438,27 @@ def ver_rutinas():
         hoy=datetime.now(); lunes=hoy-timedelta(days=hoy.weekday()); return lunes.strftime("%Y-%m-%d")
     def es_entrenador(rol): return rol.lower() in ["entrenador","admin","administrador"]
 
+    # ===== Flash messages (para mostrar mensajes post-rerun) =====
+    def _mostrar_flash_messages():
+        flashes = st.session_state.pop("_flash", [])
+        for level, msg in flashes:
+            if level == "success":
+                st.success(msg)
+            elif level == "warning":
+                st.warning(msg)
+            elif level == "info":
+                st.info(msg)
+            else:
+                st.write(msg)
+            if "Semana" in msg or "completado" in msg or "100%" in msg:
+                try:
+                    st.balloons()
+                except:
+                    pass
+
+    def _push_flash(level: str, msg: str):
+        st.session_state.setdefault("_flash", []).append((level, msg))
+
     @st.cache_data(show_spinner=False)
     def cargar_todas_las_rutinas():
         docs = db.collection("rutinas_semanales").stream()
@@ -378,6 +473,9 @@ def ver_rutinas():
     datos_usuario = doc_user.to_dict()
     nombre = datos_usuario.get("nombre","Usuario")
     rol = (st.session_state.get("rol") or datos_usuario.get("rol","desconocido")).strip().lower()
+
+    # Mostrar posibles mensajes previos
+    _mostrar_flash_messages()
 
     # Sidebar saludo
     with st.sidebar:
@@ -607,7 +705,7 @@ def ver_rutinas():
                          type="primary", use_container_width=True):
                 with st.spinner("Guardando reportes (solo faltantes) y marcando el día como realizado..."):
                     try:
-                        ok_all = guardar_reportes_del_dia(
+                        ok_all, meta = guardar_reportes_del_dia(
                             db=db,
                             correo_cliente_norm=normalizar_correo(rutina_doc.get("correo","")),
                             semana_sel=semana_sel,
@@ -617,6 +715,12 @@ def ver_rutinas():
                             rpe_valor=rpe_valor,
                         )
                         if ok_all:
+                            # Mensajes positivos (aleatorios)
+                            if meta.get("era_ultimo_dia"):
+                                _push_flash("success", random.choice(MENSAJES_SEMANA_COMPLETA))
+                            subidas = int(meta.get("subidas_peso", 0))
+                            if subidas > 0:
+                                _push_flash("info", random.choice(MENSAJES_SUBIDA_PESO))
                             st.cache_data.clear()
                             st.success("✅ Día finalizado y registrado correctamente. ¡Gran trabajo! 💪")
                             st.rerun()
@@ -626,7 +730,6 @@ def ver_rutinas():
                         st.error("❌ Error durante el guardado masivo del día.")
                         st.exception(e)
 
-    
 # Run
 if __name__ == "__main__":
     ver_rutinas()
