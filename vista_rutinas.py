@@ -8,56 +8,109 @@ from datetime import datetime, timedelta, date
 import json, random, re
 from io import BytesIO
 import matplotlib.pyplot as plt
-
+import time
 from soft_login_full import soft_login_barrier
 soft_login_full = soft_login_barrier(required_roles=["entrenador", "deportista", "admin"])
 
 # ==========================
-#  PALETA / ESTILOS
+#  PALETA / ESTILOS con soporte claro/oscuro
 # ==========================
-PRIMARY   = "#00C2FF"
-SUCCESS   = "#22C55E"
-WARNING   = "#F59E0B"
-DANGER    = "#EF4444"
-BG_DARK   = "#0B0F14"
-SURFACE   = "#121821"
-TEXT_MAIN = "#FFFFFF"
-TEXT_MUTED= "#94A3B8"
-STROKE    = "rgba(255,255,255,.08)"
+import streamlit as st
 
-st.markdown(f"""
+# Paleta modo oscuro (la tuya actual, con terracota)
+DARK = dict(
+    PRIMARY   ="#00C2FF",
+    SUCCESS   ="#22C55E",
+    WARNING   ="#F59E0B",
+    DANGER    ="#E2725B",   # ← rojo terracota
+    BG        ="#0B0F14",
+    SURFACE   ="#121821",
+    TEXT_MAIN ="#FFFFFF",
+    TEXT_MUTED="#94A3B8",
+    STROKE    ="rgba(255,255,255,.08)",
+)
+
+# Paleta modo claro (también con terracota)
+LIGHT = dict(
+    PRIMARY   ="#0077FF",
+    SUCCESS   ="#16A34A",
+    WARNING   ="#D97706",
+    DANGER    ="#E2725B",   # ← rojo terracota
+    BG        ="#FFFFFF",
+    SURFACE   ="#F8FAFC",   
+    TEXT_MAIN ="#0F172A",   
+    TEXT_MUTED="#475569",   
+    STROKE    ="rgba(2,6,23,.08)",  
+)
+
+
+# (Opcional) selector manual en la sidebar: Auto / Oscuro / Claro
+with st.sidebar:
+    theme_mode = st.selectbox(
+        "🎨 Tema", ["Auto", "Oscuro", "Claro"],
+        help="‘Auto’ sigue el modo del sistema; ‘Oscuro/Claro’ fuerzan los colores."
+    )
+
+def _vars_block(p):
+    return f"""
+    --primary:{p['PRIMARY']}; --success:{p['SUCCESS']}; --warning:{p['WARNING']}; --danger:{p['DANGER']};
+    --bg:{p['BG']}; --surface:{p['SURFACE']}; --muted:{p['TEXT_MUTED']}; --stroke:{p['STROKE']};
+    --text-main:{p['TEXT_MAIN']};
+    """
+
+# CSS: define ambas paletas + sobrescritura según sistema + override manual
+_css = f"""
 <style>
-:root {{
-  --primary:{PRIMARY}; --success:{SUCCESS}; --warning:{WARNING}; --danger:{DANGER};
-  --bg:{BG_DARK}; --surface:{SURFACE}; --muted:{TEXT_MUTED}; --stroke:{STROKE};
+/* Defaults (usaremos LIGHT por accesibilidad si no hay media query) */
+:root {{ {_vars_block(LIGHT)} }}
+
+/* Modo oscuro automático por preferencia del sistema */
+@media (prefers-color-scheme: dark) {{
+  :root {{ {_vars_block(DARK)} }}
 }}
-html,body,[data-testid="stAppViewContainer"]{{ background:var(--bg)!important; }}
-h1,h2,h3,h4 {{ color:{TEXT_MAIN}; }}
-.h-accent {{ position:relative; padding-left:10px; margin:8px 0 6px; font-weight:700; color:{TEXT_MAIN}; }}
-.h-accent:before {{ content:""; position:absolute; left:0; top:2px; bottom:2px; width:4px; border-radius:3px; background:var(--primary); }}
-.muted {{ color:{TEXT_MUTED}; font-size:12px; }}
+
+/* Estilos base que usan variables */
+html,body,[data-testid="stAppViewContainer"]{{ background:var(--bg)!important; color:var(--text-main)!important; }}
+h1,h2,h3,h4, label, p, span, div{{ color:var(--text-main); }}
+.muted {{ color:var(--muted); font-size:12px; }}
 .hr-light {{ border-bottom:1px solid var(--stroke); margin:12px 0; }}
 .card {{ background:var(--surface); border:1px solid var(--stroke); border-radius:12px; padding:12px 14px; }}
+.h-accent {{ position:relative; padding-left:10px; margin:8px 0 6px; font-weight:700; color:var(--text-main); }}
+.h-accent:before {{ content:""; position:absolute; left:0; top:2px; bottom:2px; width:4px; border-radius:3px; background:var(--primary); }}
+
+/* Badges */
 .badge {{ display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700; }}
 .badge--success {{ background:var(--success); color:#06210c; }}
-.badge--pending {{ background:rgba(0,194,255,.15); color:#8EE6FF; border:1px solid rgba(0,194,255,.25); }}
-.banner-mot {{ background: linear-gradient(90deg, {PRIMARY} 0%, #3BAFDA 100%);
-  padding:14px 16px; border-radius:12px; margin:14px 0; color:white; font-size:18px; text-align:center; font-weight:700; }}
+.badge--pending {{ background:rgba(0,194,255,.15); color:#055160; border:1px solid rgba(0,194,255,.25); }}
+
 /* Botones */
 div.stButton > button[kind="primary"], .stDownloadButton button {{
   background: var(--primary) !important; color:#001018 !important; border:none !important;
   font-weight:700 !important; border-radius:10px !important;
 }}
 div.stButton > button[kind="secondary"] {{
-  background:#1A2431 !important; color:#E0E0E0 !important; border:1px solid var(--stroke) !important;
+  background: var(--surface) !important; color: var(--text-main) !important; border:1px solid var(--stroke) !important;
   border-radius:10px !important;
 }}
 div.stButton > button:hover {{ filter:brightness(0.93); }}
+
+/* Inputs / selects */
+[data-baseweb="input"] input, .stTextInput input, .stSelectbox div, .stSlider, textarea{{
+  color:var(--text-main)!important;
+}}
 /* Sticky CTA */
 .sticky-cta {{ position:sticky; bottom:0; z-index:10; padding-top:8px;
-  background:linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,.6)); backdrop-filter: blur(6px); }}
+  background:linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,.06)); backdrop-filter: blur(6px); }}
 </style>
-""", unsafe_allow_html=True)
+"""
+
+# Override manual si el usuario lo fuerza
+if theme_mode == "Oscuro":
+    _css += f"<style>:root{{ {_vars_block(DARK)} }}</style>"
+elif theme_mode == "Claro":
+    _css += f"<style>:root{{ {_vars_block(LIGHT)} }}</style>"
+
+st.markdown(_css, unsafe_allow_html=True)
 
 # ==========================
 #  MOTIVACIONAL
@@ -387,6 +440,13 @@ def ver_rutinas():
     if es_entrenador(rol):
         clientes = sorted({r.get("cliente","") for r in rutinas_all if r.get("cliente")})
         prev_cliente = st.session_state.get("_cliente_sel")
+        # Botón pequeño alineado a la derecha (actualizar lista)
+        col_void, col_btn = st.columns([6, 1], gap="small")
+        with col_btn:
+            if st.button("🔄", key="refresh_clientes", type="secondary", help="Actualizar rutina"):
+                st.cache_data.clear()
+                st.rerun()
+
         cliente_input = st.text_input("👤 Escribe el nombre del cliente:", key="cliente_input")
         candidatos = [c for c in clientes if cliente_input.lower() in c.lower()] or clientes
         cliente_sel = st.selectbox("Selecciona cliente:", candidatos, key="cliente_sel_ui")
@@ -469,9 +529,8 @@ def ver_rutinas():
                     st.session_state["dia_sel"] = str(dia)
                     st.rerun()
                 st.markdown(
-                    "<span class='badge {cls}'>{txt}</span>".format(
+                    "<span class='badge {cls}'></span>".format(
                         cls=("badge--success" if finalizado else "badge--pending"),
-                        txt=("Completado" if finalizado else "Pendiente")
                     ),
                     unsafe_allow_html=True
                 )
@@ -588,9 +647,9 @@ def ver_rutinas():
         # ==========================
         #  🔁 BOTÓN "📝 Reporte {circuito}" (REINTEGRADO)
         # ==========================
-        # Alineado a la derecha con columnas
-        rc_cols = st.columns([6,1])
-        with rc_cols[1]:
+        # Alineado a la izquierda con columnas
+        rc_cols = st.columns([1, 6])
+        with rc_cols[0]:
             toggle_key = f"mostrar_reporte_{cliente_sel}_{semana_sel}_{circuito}"
             if toggle_key not in st.session_state:
                 st.session_state[toggle_key] = False
@@ -712,6 +771,7 @@ def ver_rutinas():
                         if ok_all:
                             st.cache_data.clear()
                             st.success("✅ Día finalizado y registrado correctamente. ¡Gran trabajo! 💪")
+                            time.sleep(2.5)  
                             st.rerun()
                         else:
                             st.error("❌ No se pudieron guardar todos los reportes del día.")
