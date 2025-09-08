@@ -1,4 +1,4 @@
-# ver_rutinas.py — UI modernizada + filtro correcto por cliente + checkbox "Sesión anterior"
+# ver_rutinas.py — UI modernizada + filtro correcto por cliente + checkbox "Sesión anterior" + Reporte por circuito (reintegrado)
 from __future__ import annotations
 
 import streamlit as st
@@ -174,10 +174,6 @@ def _semana_esta_completa(doc: dict) -> bool:
     return all(rutina.get(f"{d}_finalizado") is True for d in dias)
 
 def _calcular_racha_dias(rutinas_cliente: list[dict], semana_sel: str) -> int:
-    """
-    Racha de SEMANAS consecutivas completas (todos los días finalizados) empezando
-    en 'semana_sel' y retrocediendo en el tiempo.
-    """
     if not rutinas_cliente:
         return 0
     semanas_orden = sorted(
@@ -264,24 +260,6 @@ def _preparar_ejercicio_para_guardado(e: dict, correo_actor: str) -> dict:
     if "bloque" not in e: e["bloque"] = e.get("seccion","")
     return e
 
-# --- NUEVO: helpers para meta y comparación de pesos ---
-def _peso_prescrito_float(e: dict) -> float:
-    try:
-        return float(str(e.get("peso","")).replace(",", "."))
-    except:
-        return 0.0
-
-def _es_ultimo_dia_pendiente(doc: dict, dia_sel: str) -> bool:
-    rutina = (doc.get("rutina") or {})
-    dias = _dias_numericos(rutina)
-    if not dias: return False
-    for d in dias:
-        if str(d) == str(dia_sel):
-            continue
-        if rutina.get(f"{d}_finalizado") is not True:
-            return False
-    return True
-
 def guardar_reporte_ejercicio(db, correo_cliente_norm, semana_sel, dia_sel, ejercicio_editado):
     fecha_norm = semana_sel.replace("-", "_")
     doc_id = f"{correo_cliente_norm}_{fecha_norm}"
@@ -300,78 +278,39 @@ def guardar_reporte_ejercicio(db, correo_cliente_norm, semana_sel, dia_sel, ejer
     doc_ref.set({"rutina": {dia_sel: ejercicios_lista}}, merge=True); return True
 
 def guardar_reportes_del_dia(db, correo_cliente_norm, semana_sel, dia_sel, ejercicios, correo_actor, rpe_valor):
-    """
-    Devuelve (ok: bool, meta: dict) con:
-      - meta['era_ultimo_dia'] -> bool
-      - meta['subidas_peso']   -> int (cuántos ejercicios superaron el peso prescrito)
-    """
     dia_sel = str(dia_sel)
     fecha_norm = semana_sel.replace("-", "_")
     doc_id = f"{correo_cliente_norm}_{fecha_norm}"
     doc_ref = db.collection("rutinas_semanales").document(doc_id)
     doc = doc_ref.get()
-
-    # ¿Era el último día pendiente antes de finalizar?
-    era_ultimo_dia = False
-    if doc.exists:
-        era_ultimo_dia = _es_ultimo_dia_pendiente(doc.to_dict(), dia_sel)
-
     ejercicios_guardados = []
     if doc.exists:
         rutina = doc.to_dict().get("rutina", {})
         ejercicios_raw = rutina.get(dia_sel, [])
         ejercicios_guardados = obtener_lista_ejercicios(ejercicios_raw)
-
     def _key_ex(e: dict):
         return ((e.get("bloque") or e.get("seccion") or "").strip().lower(),
                 (e.get("circuito") or "").strip().upper(),
                 (e.get("ejercicio") or "").strip().lower())
-
     idx_guardados = {_key_ex(e): e for e in ejercicios_guardados if isinstance(e, dict)}
-
-    subidas_peso = 0
-
     for e in ejercicios:
-        if not isinstance(e, dict): 
-            continue
+        if not isinstance(e, dict): continue
         key = _key_ex(e)
         ex_prev = idx_guardados.get(key)
-        if ex_prev and _tiene_reporte_guardado(ex_prev):
-            # Ya tenía un reporte con datos, no lo pisamos
-            continue
-
+        if ex_prev and _tiene_reporte_guardado(ex_prev): continue
         e2 = _preparar_ejercicio_para_guardado(dict(e), correo_actor)
-
-        # Comparación: peso alcanzado (máximo en series) vs peso prescrito
-        peso_prescrito = _peso_prescrito_float(e)
-        peso_alc = e2.get("peso_alcanzado", None)
-        if peso_alc is None:
-            pa, _, _ = _parsear_series(e2.get("series_data", []))
-            peso_alc = pa
-
-        try:
-            if (peso_alc is not None) and (float(peso_alc) > (peso_prescrito + 1e-9)):
-                subidas_peso += 1
-        except:
-            pass
-
         ok = guardar_reporte_ejercicio(db=db, correo_cliente_norm=correo_cliente_norm,
                                        semana_sel=semana_sel, dia_sel=dia_sel, ejercicio_editado=e2)
-        if not ok:
-            return False, {"era_ultimo_dia": era_ultimo_dia, "subidas_peso": subidas_peso}
-
-    # Marcar finalización del día + RPE
+        if not ok: return False
     updates = {"rutina": {f"{dia_sel}_finalizado": True,
                           f"{dia_sel}_finalizado_por": correo_actor,
                           f"{dia_sel}_finalizado_en": firestore.SERVER_TIMESTAMP}}
     if rpe_valor is not None:
         updates["rutina"][f"{dia_sel}_rpe"] = float(rpe_valor)
-    doc_ref.set(updates, merge=True)
-
-    return True, {"era_ultimo_dia": era_ultimo_dia, "subidas_peso": subidas_peso}
+    doc_ref.set(updates, merge=True); return True
 
 # ==========================
-#  PNG Resumen
+#  PNG Resumen (no se toca)
 # ==========================
 def generar_tarjeta_resumen_sesion(nombre, dia_indice, ejercicios_workout, focus_tuple, gym_name="Motion Performance") -> plt.Figure:
     total_series = sum(int(e.get("series",0) or 0) for e in ejercicios_workout)
@@ -406,23 +345,6 @@ def generar_tarjeta_resumen_sesion(nombre, dia_indice, ejercicios_workout, focus
     fig.tight_layout(); return fig
 
 # ==========================
-#  MENSAJES ALEATORIOS (Caso 1 y Caso 2)
-# ==========================
-MENSAJES_SEMANA_COMPLETA = [
-    "🏆 Has completado cada sesión de esta semana. ¡Sigue construyendo tu mejor versión!",
-    "🔥 Semana terminada con todas tus sesiones cumplidas. Estás moldeando tu mejor versión, paso a paso.",
-    "👏 Cerraste la semana completa. Esa disciplina es la base para seguir creciendo hacia tu mejor versión.",
-    "🌟 Cada día de entrenamiento cumplido suma. Hoy alcanzaste el 100% de tu semana. ¡Imparable en tu camino hacia tu mejor versión!"
-]
-
-MENSAJES_SUBIDA_PESO = [
-    "💪 Bien por ese esfuerzo extra, sigue rompiendo tus límites paso a paso.",
-    "🔥 Excelente ese esfuerzo extra. Cada kilo de más es una señal de que estás rompiendo tus propios límites.",
-    "🚀 Ese extra que diste hoy demuestra tu progreso. ¡Bien por atreverte y seguir superando tus límites!",
-    "🙌 Bien hecho con ese esfuerzo adicional. Estás empujando tus propios límites cada vez más."
-]
-
-# ==========================
 #  VISTA
 # ==========================
 def ver_rutinas():
@@ -437,27 +359,6 @@ def ver_rutinas():
     def obtener_fecha_lunes():
         hoy=datetime.now(); lunes=hoy-timedelta(days=hoy.weekday()); return lunes.strftime("%Y-%m-%d")
     def es_entrenador(rol): return rol.lower() in ["entrenador","admin","administrador"]
-
-    # ===== Flash messages (para mostrar mensajes post-rerun) =====
-    def _mostrar_flash_messages():
-        flashes = st.session_state.pop("_flash", [])
-        for level, msg in flashes:
-            if level == "success":
-                st.success(msg)
-            elif level == "warning":
-                st.warning(msg)
-            elif level == "info":
-                st.info(msg)
-            else:
-                st.write(msg)
-            if "Semana" in msg or "completado" in msg or "100%" in msg:
-                try:
-                    st.balloons()
-                except:
-                    pass
-
-    def _push_flash(level: str, msg: str):
-        st.session_state.setdefault("_flash", []).append((level, msg))
 
     @st.cache_data(show_spinner=False)
     def cargar_todas_las_rutinas():
@@ -474,9 +375,6 @@ def ver_rutinas():
     nombre = datos_usuario.get("nombre","Usuario")
     rol = (st.session_state.get("rol") or datos_usuario.get("rol","desconocido")).strip().lower()
 
-    # Mostrar posibles mensajes previos
-    _mostrar_flash_messages()
-
     # Sidebar saludo
     with st.sidebar:
         st.markdown(f"<div class='card'><b>Bienvenido {nombre.split(' ')[0]}</b></div>", unsafe_allow_html=True)
@@ -484,36 +382,22 @@ def ver_rutinas():
     # Cargar todas y filtrar por cliente según rol
     rutinas_all = cargar_todas_las_rutinas()
     if not rutinas_all: st.warning("⚠️ No se encontraron rutinas."); st.stop()
-    
+
     cliente_sel = None
     if es_entrenador(rol):
         clientes = sorted({r.get("cliente","") for r in rutinas_all if r.get("cliente")})
         prev_cliente = st.session_state.get("_cliente_sel")
-
-        # 👉 Botón pequeño alineado a la derecha
-        col_a, col_b = st.columns([6,1])  # más espacio vacío a la izquierda
-        with col_b:
-            st.button("🔄", key="refresh_clientes", type="secondary", help="Actualizar rutina")
-
-        if st.session_state.get("refresh_clientes"):
-            st.cache_data.clear()
-            st.rerun()
-
         cliente_input = st.text_input("👤 Escribe el nombre del cliente:", key="cliente_input")
         candidatos = [c for c in clientes if cliente_input.lower() in c.lower()] or clientes
         cliente_sel = st.selectbox("Selecciona cliente:", candidatos, key="cliente_sel_ui")
-
         if prev_cliente != cliente_sel:
             st.session_state["_cliente_sel"] = cliente_sel
             st.session_state.pop("semana_sel", None)
             st.session_state.pop("dia_sel", None)
-
-        rutinas_cliente = [r for r in rutinas_all if r.get("cliente") == cliente_sel]
+        rutinas_cliente = [r for r in rutinas_all if r.get("cliente")==cliente_sel]
     else:
-        rutinas_cliente = [r for r in rutinas_all if (r.get("correo","") or "").strip().lower() == correo_raw]
+        rutinas_cliente = [r for r in rutinas_all if (r.get("correo","") or "").strip().lower()==correo_raw]
         cliente_sel = nombre
-
-
 
     if not rutinas_cliente:
         st.warning("⚠️ No se encontraron rutinas para ese cliente.")
@@ -585,8 +469,9 @@ def ver_rutinas():
                     st.session_state["dia_sel"] = str(dia)
                     st.rerun()
                 st.markdown(
-                    "<span class='badge {cls}'></span>".format(
+                    "<span class='badge {cls}'>{txt}</span>".format(
                         cls=("badge--success" if finalizado else "badge--pending"),
+                        txt=("Completado" if finalizado else "Pendiente")
                     ),
                     unsafe_allow_html=True
                 )
@@ -633,6 +518,7 @@ def ver_rutinas():
         titulo = "Warm-Up" if circuito=="A" else ("Workout" if circuito=="D" else f"Circuito {circuito}")
         st.markdown(f"<h4 class='h-accent'>{titulo}</h4>", unsafe_allow_html=True)
 
+        # === Render de ejercicios (info + video + sesión anterior global) ===
         for idx, e in enumerate(lista):
             nombre = e.get("ejercicio", f"Ejercicio {idx+1}")
             detalle = (e.get("detalle","") or "").strip()
@@ -699,6 +585,101 @@ def ver_rutinas():
                 else:
                     st.caption("Sin coincidencias para este ejercicio.")
 
+        # ==========================
+        #  🔁 BOTÓN "📝 Reporte {circuito}" (REINTEGRADO)
+        # ==========================
+        # Alineado a la derecha con columnas
+        rc_cols = st.columns([6,1])
+        with rc_cols[1]:
+            toggle_key = f"mostrar_reporte_{cliente_sel}_{semana_sel}_{circuito}"
+            if toggle_key not in st.session_state:
+                st.session_state[toggle_key] = False
+            if st.button(f"📝 Reporte {circuito}", key=f"btn_reporte_{cliente_sel}_{semana_sel}_{circuito}", type="secondary"):
+                st.session_state[toggle_key] = not st.session_state[toggle_key]
+
+        if st.session_state.get(toggle_key, False):
+            st.markdown(f"### 📋 Registro del circuito {circuito}")
+            for idx, e in enumerate(lista):
+                ejercicio_nombre = e.get("ejercicio", f"Ejercicio {idx+1}")
+                ejercicio_id = f"{cliente_sel}_{semana_sel}_{circuito}_{ejercicio_nombre}_{idx}".lower()
+                st.markdown(f"#### {ejercicio_nombre}")
+
+                # Inicializa/asegura series_data con defaults
+                try:
+                    num_series = int(e.get("series", 0))
+                except:
+                    num_series = 0
+
+                reps_def, peso_def, rir_def = defaults_de_ejercicio(e)
+                if "series_data" not in e or not isinstance(e["series_data"], list) or len(e["series_data"]) != num_series:
+                    e["series_data"] = [{"reps": reps_def, "peso": peso_def, "rir": rir_def} for _ in range(num_series)]
+                else:
+                    for s in e["series_data"]:
+                        if not str(s.get("reps", "")).strip():
+                            s["reps"] = reps_def
+                        if not str(s.get("peso", "")).strip():
+                            s["peso"] = peso_def
+                        if not str(s.get("rir", "")).strip():
+                            s["rir"] = rir_def
+
+                # Inputs por serie
+                for s_idx in range(num_series):
+                    st.markdown(f"**Serie {s_idx + 1}**")
+                    s_cols = st.columns(3)
+                    e["series_data"][s_idx]["reps"] = s_cols[0].text_input(
+                        "Reps", value=e["series_data"][s_idx].get("reps", ""),
+                        placeholder="Reps", key=f"rep_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
+                    )
+                    e["series_data"][s_idx]["peso"] = s_cols[1].text_input(
+                        "Peso", value=e["series_data"][s_idx].get("peso", ""),
+                        placeholder="Kg", key=f"peso_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
+                    )
+                    e["series_data"][s_idx]["rir"] = s_cols[2].text_input(
+                        "RIR", value=e["series_data"][s_idx].get("rir", ""),
+                        placeholder="RIR", key=f"rir_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
+                    )
+
+                # Comentario general
+                e["comentario"] = st.text_input(
+                    "Comentario general", value=e.get("comentario", ""),
+                    placeholder="Comentario", key=f"coment_{ejercicio_id}"
+                )
+
+                # Guardar SOLO este ejercicio
+                btn_guardar_key = f"guardar_reporte_{ejercicio_id}"
+                if st.button("💾 Guardar este reporte", key=btn_guardar_key):
+                    with st.spinner("Guardando reporte del ejercicio..."):
+                        peso_alc, reps_alc, rir_alc = _parsear_series(e.get("series_data", []))
+                        if peso_alc is not None: e["peso_alcanzado"] = peso_alc
+                        if reps_alc is not None: e["reps_alcanzadas"] = reps_alc
+                        if rir_alc  is not None: e["rir_alcanzado"]  = rir_alc
+
+                        hay_input = any([
+                            (e.get("comentario", "") or "").strip(),
+                            peso_alc is not None,
+                            reps_alc is not None,
+                            rir_alc  is not None
+                        ])
+                        if hay_input:
+                            e["coach_responsable"] = st.session_state.get("correo","")
+
+                        if "bloque" not in e:
+                            e["bloque"] = e.get("seccion", "")
+
+                        ok = guardar_reporte_ejercicio(
+                            db=db,
+                            correo_cliente_norm=normalizar_correo(rutina_doc.get("correo","")),
+                            semana_sel=semana_sel,
+                            dia_sel=str(dia_sel),
+                            ejercicio_editado=e,
+                        )
+                        if ok:
+                            st.success("✅ Reporte guardado.")
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error("❌ No se pudo guardar el reporte.")
+
     # RPE + CTA
     st.markdown("<div class='hr-light'></div>", unsafe_allow_html=True)
     valor_rpe_inicial = rutina_doc["rutina"].get(str(dia_sel) + "_rpe","")
@@ -719,7 +700,7 @@ def ver_rutinas():
                          type="primary", use_container_width=True):
                 with st.spinner("Guardando reportes (solo faltantes) y marcando el día como realizado..."):
                     try:
-                        ok_all, meta = guardar_reportes_del_dia(
+                        ok_all = guardar_reportes_del_dia(
                             db=db,
                             correo_cliente_norm=normalizar_correo(rutina_doc.get("correo","")),
                             semana_sel=semana_sel,
@@ -729,12 +710,6 @@ def ver_rutinas():
                             rpe_valor=rpe_valor,
                         )
                         if ok_all:
-                            # Mensajes positivos (aleatorios)
-                            if meta.get("era_ultimo_dia"):
-                                _push_flash("success", random.choice(MENSAJES_SEMANA_COMPLETA))
-                            subidas = int(meta.get("subidas_peso", 0))
-                            if subidas > 0:
-                                _push_flash("info", random.choice(MENSAJES_SUBIDA_PESO))
                             st.cache_data.clear()
                             st.success("✅ Día finalizado y registrado correctamente. ¡Gran trabajo! 💪")
                             st.rerun()
@@ -744,7 +719,6 @@ def ver_rutinas():
                         st.error("❌ Error durante el guardado masivo del día.")
                         st.exception(e)
 
-    
 # Run
 if __name__ == "__main__":
     ver_rutinas()
