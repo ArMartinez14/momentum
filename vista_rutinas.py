@@ -484,22 +484,36 @@ def ver_rutinas():
     # Cargar todas y filtrar por cliente según rol
     rutinas_all = cargar_todas_las_rutinas()
     if not rutinas_all: st.warning("⚠️ No se encontraron rutinas."); st.stop()
-
+    
     cliente_sel = None
     if es_entrenador(rol):
         clientes = sorted({r.get("cliente","") for r in rutinas_all if r.get("cliente")})
         prev_cliente = st.session_state.get("_cliente_sel")
+
+        # 👉 Botón pequeño alineado a la derecha
+        col_a, col_b = st.columns([6,1])  # más espacio vacío a la izquierda
+        with col_b:
+            st.button("🔄", key="refresh_clientes", type="secondary", help="Actualizar rutina")
+
+        if st.session_state.get("refresh_clientes"):
+            st.cache_data.clear()
+            st.rerun()
+
         cliente_input = st.text_input("👤 Escribe el nombre del cliente:", key="cliente_input")
         candidatos = [c for c in clientes if cliente_input.lower() in c.lower()] or clientes
         cliente_sel = st.selectbox("Selecciona cliente:", candidatos, key="cliente_sel_ui")
+
         if prev_cliente != cliente_sel:
             st.session_state["_cliente_sel"] = cliente_sel
             st.session_state.pop("semana_sel", None)
             st.session_state.pop("dia_sel", None)
-        rutinas_cliente = [r for r in rutinas_all if r.get("cliente")==cliente_sel]
+
+        rutinas_cliente = [r for r in rutinas_all if r.get("cliente") == cliente_sel]
     else:
-        rutinas_cliente = [r for r in rutinas_all if (r.get("correo","") or "").strip().lower()==correo_raw]
+        rutinas_cliente = [r for r in rutinas_all if (r.get("correo","") or "").strip().lower() == correo_raw]
         cliente_sel = nombre
+
+
 
     if not rutinas_cliente:
         st.warning("⚠️ No se encontraron rutinas para ese cliente.")
@@ -730,6 +744,7 @@ def ver_rutinas():
                         st.error("❌ Error durante el guardado masivo del día.")
                         st.exception(e)
 
+    
 # Run
 if __name__ == "__main__":
     ver_rutinas()
