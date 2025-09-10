@@ -44,10 +44,10 @@ LIGHT = dict(
 )
 
 
-# (Opcional) selector manual en la sidebar: Auto / Oscuro / Claro
 with st.sidebar:
     theme_mode = st.selectbox(
         "🎨 Tema", ["Auto", "Oscuro", "Claro"],
+        key="theme_mode_vista_rutinas",  # 👈 otra clave única
         help="‘Auto’ sigue el modo del sistema; ‘Oscuro/Claro’ fuerzan los colores."
     )
 
@@ -146,6 +146,31 @@ def mensaje_motivador_del_dia(nombre: str, correo_id: str) -> str:
 # ==========================
 #  HELPERS NUM / FORMATO
 # ==========================
+
+import re
+
+_URL_RGX = re.compile(r'(https?://\S+)', re.IGNORECASE)
+
+def _video_y_detalle_desde_ejercicio(e: dict) -> tuple[str, str]:
+    """
+    Retorna (video_url, detalle_visible). Si 'detalle' contiene un link y no hay e['video'],
+    usa ese link como video y oculta el detalle.
+    """
+    video = (e.get("video") or "").strip()
+    detalle = (e.get("detalle") or "").strip()
+
+    # Si ya hay video explícito, devolvemos tal cual y mantenemos el detalle
+    if video:
+        return video, detalle
+
+    # Si no hay video pero el detalle tiene un link -> usar ese link como video y NO mostrar detalle
+    if detalle:
+        m = _URL_RGX.search(detalle)
+        if m:
+            url = m.group(1).strip()
+            return url, ""  # ocultamos detalle si contenía link
+    return "", detalle
+
 def _to_float_or_none(v):
     try:
         s = str(v).strip().replace(",", ".")
@@ -163,6 +188,38 @@ def _format_minutos(v) -> str:
 # ==========================
 #  NORMALIZACIÓN / LISTAS
 # ==========================
+def _repstr(e: dict) -> str:
+    """3 × 10–12 / 3 × 12+ / 3 × ≤12 / 3 × —"""
+    series = e.get("series") or e.get("series_min") or e.get("Series") or ""
+    try:
+        series = int(series)
+    except:
+        series = str(series) if str(series).strip() else "—"
+    a = f"{series} × "
+    rmin = e.get("reps_min") or e.get("RepsMin") or e.get("repeticiones_min")
+    rmax = e.get("reps_max") or e.get("RepsMax") or e.get("repeticiones_max")
+    reps = e.get("repeticiones")
+    if rmin and rmax:
+        return a + f"{rmin}–{rmax}"
+    if rmin:
+        return a + f"{rmin}+"
+    if rmax:
+        return a + f"≤{rmax}"
+    if reps:
+        return a + f"{reps}"
+    return a + "—"
+
+def _descanso_texto(e: dict) -> str:
+    v = e.get("descanso") or e.get("rest") or ""
+    if v in ("", None): 
+        return ""
+    try:
+        f = float(str(v).replace(",", "."))
+    except:
+        return str(v)
+    m = int(round(f))
+    return f"{m} Minuto" if m == 1 else f"{m} Minutos"
+
 def obtener_lista_ejercicios(data_dia):
     if data_dia is None: return []
     if isinstance(data_dia, dict):
@@ -577,55 +634,74 @@ def ver_rutinas():
         titulo = "Warm-Up" if circuito=="A" else ("Workout" if circuito=="D" else f"Circuito {circuito}")
         st.markdown(f"<h4 class='h-accent'>{titulo}</h4>", unsafe_allow_html=True)
 
-        # === Render de ejercicios (info + video + sesión anterior global) ===
+        # === Render de ejercicios (nombre como botón si hay video; 'detalle' puede traer link) ===
         for idx, e in enumerate(lista):
-            nombre = e.get("ejercicio", f"Ejercicio {idx+1}")
-            detalle = (e.get("detalle","") or "").strip()
-            series = e.get("series","")
-            reps_min = e.get("reps_min") or e.get("RepsMin","")
-            reps_max = e.get("reps_max") or e.get("RepsMax","")
-            repeticiones = e.get("repeticiones","")
-            peso = e.get("peso","")
-            rir = e.get("rir","")
-            tiempo = e.get("tiempo","")
+            nombre    = e.get("ejercicio", f"Ejercicio {idx+1}")
+            peso      = e.get("peso","")
+            tiempo    = e.get("tiempo","")
             velocidad = e.get("velocidad","")
-            descanso = e.get("descanso","")
+            rir_val   = e.get("rir")
 
-            if reps_min!="" and reps_max!="": rep_str = f"{series}x {reps_min} a {reps_max}"
-            elif reps_min!="":                rep_str = f"{series}x{reps_min}+"
-            elif reps_max!="":                rep_str = f"{series}x≤{reps_max}"
-            elif repeticiones:                rep_str = f"{series}x{repeticiones}"
-            else:                              rep_str = f"{series}x"
+            # 1) Video (puede venir en e['video'] o dentro de 'detalle' como link)
+            video_url, detalle_visible = _video_y_detalle_desde_ejercicio(e)
 
-            info_partes = [rep_str]
-            if peso:       info_partes.append(f"{peso}kg")
-            if tiempo:     info_partes.append(f"{tiempo} seg")
-            if velocidad:  info_partes.append(f"{velocidad} m/s")
-            if descanso:   info_partes.append(f"Descanso: {_format_minutos(descanso)}")
-            if rir:        info_partes.append(f"RIR {rir}")
-            info_str = " · ".join(info_partes)
-            titulo_linea = nombre + (f" — {detalle}" if detalle else "")
+            # 2) Línea secundaria: reps/peso/tiempo/descanso/velocidad (SIN RIR)
+            partes = [f"{_repstr(e)}"]
+            if peso:      partes.append(f"{peso} kg")
+            if tiempo:    partes.append(f"{tiempo} seg")
+            if velocidad: partes.append(f"{velocidad} m/s")
+            dsc = _descanso_texto(e)
+            if dsc:       partes.append(f"{dsc}")
+            info_str = " · ".join(partes)
 
-            # Video toggle
-            video_url = (e.get("video","") or "").strip()
+            # 3) Contenedor visual
+            st.markdown("<div style='margin:12px 0;'>", unsafe_allow_html=True)
+
+            # 3.a) Título (si hay video -> el nombre es botón; si no -> texto)
             video_btn_key = f"video_btn_{cliente_sel}_{semana_sel}_{circuito}_{idx}"
             mostrar_video_key = f"mostrar_video_{cliente_sel}_{semana_sel}_{circuito}_{idx}"
-            if video_url:
-                if st.button(f"{titulo_linea} 🎥 — {info_str}", key=video_btn_key, type="primary",
-                             help="Haz clic para ver/ocultar video"):
-                    st.session_state[mostrar_video_key] = not st.session_state.get(mostrar_video_key, False)
-                if st.session_state.get(mostrar_video_key, False):
-                    url = video_url
-                    if "youtube.com/shorts/" in url:
-                        try:
-                            video_id = url.split("shorts/")[1].split("?")[0]
-                            url = f"https://www.youtube.com/watch?v={video_id}"
-                        except: pass
-                    st.video(url)
-            else:
-                st.markdown(f"**{titulo_linea} — {info_str}**")
 
-            # Sesión anterior (checkbox global)
+            if video_url:
+                # nombre como botón (ajustado al texto, no ocupa todo el ancho)
+                titulo_btn = nombre if not detalle_visible else f"{nombre} — {detalle_visible}"
+                btn_clicked = st.button(
+                    titulo_btn,
+                    key=video_btn_key,
+                    type="primary",
+                    help="Click para mostrar/ocultar video",
+                )
+                if btn_clicked:
+                    st.session_state[mostrar_video_key] = not st.session_state.get(mostrar_video_key, False)
+            else:
+                # nombre como texto (si no hay link en detalle, lo mostramos normal)
+                titulo_linea = nombre + (f" — {detalle_visible}" if detalle_visible else "")
+                st.markdown(
+                    f"<div style='font-weight:800;font-size:1.05rem;color:var(--text-main);'>{titulo_linea}</div>",
+                    unsafe_allow_html=True
+                )
+
+            # 3.b) Línea de detalles (reps/peso/descanso/velocidad)
+            st.markdown(f"<div class='muted' style='margin-top:2px;'>{info_str}</div>", unsafe_allow_html=True)
+
+            # 3.c) RIR en una fila aparte
+            if rir_val:
+                st.markdown(f"<div class='muted' style='margin-top:2px;'>RIR {rir_val}</div>", unsafe_allow_html=True)
+
+            # 3.d) Mostrar video embebido si está activo
+            if video_url and st.session_state.get(mostrar_video_key, False):
+                url = video_url
+                # Normalizar Shorts de YouTube
+                if "youtube.com/shorts/" in url:
+                    try:
+                        video_id = url.split("shorts/")[1].split("?")[0]
+                        url = f"https://www.youtube.com/watch?v={video_id}"
+                    except:
+                        pass
+                st.video(url)
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            # 4) Sesión anterior (misma lógica de siempre)
             if mostrar_prev:
                 key_prev = ((e.get("bloque") or e.get("seccion") or "").strip().lower(),
                             (e.get("circuito") or "").strip().upper(),
