@@ -645,7 +645,7 @@ def crear_rutinas():
                 if _tiene_permiso_agregar():
                     pop = head_cols[4].popover("＋", use_container_width=True)  # ← sin key (tu Streamlit no lo soporta)
                     with pop:
-                        st.markdown("**📌 Crear Ejercicio**")
+                        st.markdown("**📌 Crear o Editar Ejercicio (rápido)**")
 
                         # === Catálogos (mismos que admin) ===
                         try:
@@ -653,13 +653,12 @@ def crear_rutinas():
                         except Exception as e:
                             st.error(f"No pude cargar catálogos: {e}")
                             cat = {}
+                        catalogo_carac   = cat.get("caracteristicas", []) or []
+                        catalogo_patron  = cat.get("patrones_movimiento", []) or []
+                        catalogo_grupo_p = cat.get("grupo_muscular_principal", []) or []
+                        catalogo_grupo_s = cat.get("grupo_muscular_secundario", []) or []
 
-                        catalogo_carac    = cat.get("caracteristicas", []) or []
-                        catalogo_patron   = cat.get("patrones_movimiento", []) or []
-                        catalogo_grupo_p  = cat.get("grupo_muscular_principal", []) or []
-                        catalogo_grupo_s  = cat.get("grupo_muscular_secundario", []) or []
-
-                        # === Select con opción “➕ Agregar nuevo …” (igual idea que admin) ===
+                        # === Select con opción “➕ Agregar nuevo …”
                         def _combo_con_agregar(label: str, opciones: list[str], key_base: str, valor_inicial: str = "") -> str:
                             SENT = "➕ Agregar nuevo…"
                             base_opts = sorted(opciones or [])
@@ -674,7 +673,6 @@ def crear_rutinas():
                                     index_default = 0
 
                             sel = st.selectbox(label, opts, index=index_default, key=f"{key_base}_sel_{key_seccion}")
-
                             if sel == SENT:
                                 st.markdown("<div class='card'>", unsafe_allow_html=True)
                                 nuevo = st.text_input(f"Ingresar nuevo valor para {label.lower()}:", key=f"{key_base}_nuevo_{key_seccion}")
@@ -705,7 +703,7 @@ def crear_rutinas():
                             else:
                                 return sel
 
-                        # === Prefill (como antes): usa última búsqueda escrita en esta sección ===
+                        # === Prefill con la última búsqueda de ESTA sección ===
                         _prefill_detalle = ""
                         _prefix_busca = f"buscar_{i}_{seccion.replace(' ','_')}_"
                         try:
@@ -716,7 +714,7 @@ def crear_rutinas():
                         except Exception:
                             pass
 
-                        # === FORMULARIO (los mismos campos que en admin) ===
+                        # === FORMULARIO (igual que admin) ===
                         c1, c2 = st.columns(2)
                         with c1:
                             marca = st.text_input("Marca (opcional):", key=f"marca_top_{key_seccion}").strip()
@@ -727,30 +725,30 @@ def crear_rutinas():
 
                         c3, c4 = st.columns(2)
                         with c3:
-                            caracteristica = _combo_con_agregar(
-                                "Característica", catalogo_carac, key_base=f"carac_top_{i}_{seccion}"
-                            )
+                            caracteristica = _combo_con_agregar("Característica",        catalogo_carac,   key_base=f"carac_top_{i}_{seccion}")
                         with c4:
-                            patron = _combo_con_agregar(
-                                "Patrón de Movimiento", catalogo_patron, key_base=f"patron_top_{i}_{seccion}"
-                            )
+                            patron         = _combo_con_agregar("Patrón de Movimiento",  catalogo_patron,  key_base=f"patron_top_{i}_{seccion}")
 
                         c5, c6 = st.columns(2)
                         with c5:
-                            grupo_p = _combo_con_agregar(
-                                "Grupo Muscular Principal", catalogo_grupo_p, key_base=f"grupoP_top_{i}_{seccion}"
-                            )
+                            grupo_p        = _combo_con_agregar("Grupo Muscular Principal",  catalogo_grupo_p, key_base=f"grupoP_top_{i}_{seccion}")
                         with c6:
-                            grupo_s = _combo_con_agregar(
-                                "Grupo Muscular Secundario", catalogo_grupo_s, key_base=f"grupoS_top_{i}_{seccion}"
-                            )
+                            grupo_s        = _combo_con_agregar("Grupo Muscular Secundario", catalogo_grupo_s, key_base=f"grupoS_top_{i}_{seccion}")
 
-                        # === Preview de implemento/pesos si hay marca+máquina (igual que admin) ===
+                        # Link de video (opcional) — NUEVO
+                        video_url = st.text_input(
+                            "URL del video (opcional):",
+                            key=f"video_top_{key_seccion}",
+                            placeholder="https://youtu.be/…"
+                        )
+
+                        # Preview de implemento/pesos si hay Marca + Máquina
                         id_impl_preview = ""
                         if marca and maquina:
-                            id_impl_preview = _resolver_id_implemento(marca, maquina)
-                            if id_impl_preview:
-                                try:
+                            try:
+                                # usa tu helper si lo tienes; si no, pega el helper del bloque 2
+                                id_impl_preview = _resolver_id_implemento(marca, maquina)
+                                if id_impl_preview:
                                     snap_impl = get_db().collection("implementos").document(str(id_impl_preview)).get()
                                     if snap_impl.exists:
                                         data_impl = snap_impl.to_dict() or {}
@@ -764,28 +762,25 @@ def crear_rutinas():
                                             pesos_list = []
                                         if pesos_list:
                                             st.caption("Pesos disponibles (preview): " + ", ".join(str(p) for p in pesos_list))
-                                except Exception:
-                                    pass
+                            except Exception:
+                                pass
 
-                        # === Nombre visible (mismo criterio: marca + máquina + detalle) ===
+                        # Nombre compuesto (solo lectura)
                         nombre_ej = " ".join([x for x in [marca, maquina, detalle] if x]).strip()
                         st.text_input("Nombre completo del ejercicio:", value=nombre_ej, key=f"nombre_top_{key_seccion}", disabled=True)
 
-                        # === Visibilidad (igual que admin) ===
                         publico_default = True if es_admin() else False
-                        publico_check = st.checkbox("Hacer público (visible para todos los entrenadores)", value=publico_default, key=f"pub_chk_{key_seccion}")
+                        publico_check   = st.checkbox("Hacer público (visible para todos los entrenadores)", value=publico_default, key=f"pub_chk_{key_seccion}")
 
-                        # === Guardar ===
+                        # Guardar
                         cols_btn_save = st.columns([1,3])
                         with cols_btn_save[0]:
                             if st.button("💾 Guardar Ejercicio", key=f"btn_guardar_top_{key_seccion}", type="primary", use_container_width=True):
-                                # Validaciones mínimas (igual que admin)
                                 faltantes = [etq for etq, val in {
                                     "Característica": caracteristica,
                                     "Patrón de Movimiento": patron,
                                     "Grupo Muscular Principal": grupo_p
                                 }.items() if not (val or "").strip()]
-
                                 if faltantes:
                                     st.warning("⚠️ Completa: " + ", ".join(faltantes))
                                 else:
@@ -793,49 +788,45 @@ def crear_rutinas():
                                     if not nombre_final:
                                         st.warning("⚠️ El campo 'nombre' es obligatorio (usa al menos Detalle/Máquina/Marca).")
                                     else:
-                                        # Resolver implemento DEFINITIVO solo al guardar
-                                        id_impl_final = _resolver_id_implemento(marca, maquina)
+                                        id_impl_final = _resolver_id_implemento(marca, maquina) if (marca and maquina) else ""
 
                                         payload = {
-                                            # campos core (mismo naming que admin)
                                             "nombre": nombre_final,
-                                            "marca": marca,
+                                            "marca":  marca,
                                             "maquina": maquina,
                                             "detalle": detalle,
                                             "caracteristica": caracteristica,
                                             "patron_de_movimiento": patron,
-                                            "grupo_muscular_principal": grupo_p,
+                                            "grupo_muscular_principal":  grupo_p,
                                             "grupo_muscular_secundario": grupo_s or "",
                                             "id_implemento": id_impl_final,
-                                            # visibilidad: lo traduce guardar_ejercicio_firestore -> 'publico'
+                                            "video": (video_url or "").strip(),          # ← guarda el link de video
                                             "publico_flag": bool(publico_check),
                                         }
-
                                         try:
-                                            # Guarda usando tu helper (respeta reglas admin/entrenador y doc_id)
                                             guardar_ejercicio_firestore(nombre_final, payload)
 
-                                            # Refrescar cache local para que aparezca de inmediato en los selectbox/búsquedas
+                                            # refresca cache local para búsquedas/pesos/video inmediato
                                             ejercicios_dict[nombre_final] = {
                                                 "nombre": nombre_final,
-                                                "marca": marca,
+                                                "marca":  marca,
                                                 "maquina": maquina,
                                                 "detalle": detalle,
                                                 "caracteristica": caracteristica,
                                                 "patron_de_movimiento": patron,
-                                                "grupo_muscular_principal": grupo_p,
+                                                "grupo_muscular_principal":  grupo_p,
                                                 "grupo_muscular_secundario": grupo_s or "",
-                                                "id_implemento": id_implemento if (id_implemento := id_impl_final) else "",
+                                                "id_implemento": id_impl_final if id_impl_final else "",
                                                 "publico": bool(publico_check),
+                                                "video": (video_url or "").strip(),
                                             }
-
                                             st.success(f"✅ Ejercicio '{nombre_final}' guardado correctamente")
-                                            st.cache_data.clear()   # limpiar caches ANTES de recargar
+                                            st.cache_data.clear()
                                             st.rerun()
                                         except Exception as e:
                                             st.error(f"❌ Error al guardar: {e}")
                 else:
-                    head_cols[4].button("＋", use_container_width=True, disabled=True, key=f"btn_plus_disabled_{key_seccion}")
+                    head_cols[4].button("＋", use_container_width=True, disabled=True)
                     st.caption("Solo *Administrador* o *Entrenador* pueden crear ejercicios.")
 
                 # ======= Construcción dinámica de columnas =======
