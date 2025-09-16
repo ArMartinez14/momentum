@@ -50,6 +50,36 @@ with st.sidebar:
         key="theme_mode_vista_rutinas",  # 👈 otra clave única
         help="‘Auto’ sigue el modo del sistema; ‘Oscuro/Claro’ fuerzan los colores."
     )
+def _rirstr(e: dict) -> str:
+    """
+    Devuelve el RIR en formato:
+      - "min–max" si existen campos de rango (RirMin/RirMax o rir_min/rir_max)
+      - valor único si solo hay uno de ellos
+      - valor 'legacy' si viene como texto único en e['rir'] / e['RIR'] / e['Rir']
+      - "" si no hay datos
+    """
+    # 1) Nuevos campos con rango
+    rmin = e.get("RirMin") or e.get("rir_min") or e.get("RIR_min")
+    rmax = e.get("RirMax") or e.get("rir_max") or e.get("RIR_max")
+
+    rmin_s = str(rmin).strip() if rmin not in (None, "") else ""
+    rmax_s = str(rmax).strip() if rmax not in (None, "") else ""
+
+    if rmin_s and rmax_s:
+        return f"{rmin_s}–{rmax_s}"
+    if rmin_s or rmax_s:
+        return rmin_s or rmax_s
+
+    # 2) Formato antiguo: un solo campo de texto/numero
+    legacy = e.get("rir") or e.get("RIR") or e.get("Rir") or ""
+    legacy_s = str(legacy).strip()
+    if not legacy_s:
+        return ""
+
+    # Si venía "RIR 2" o "2 RIR", extrae número; si no, deja el texto
+    m = re.search(r"-?\d+(\.\d+)?", legacy_s)
+    return m.group(0) if m else legacy_s
+
 
 def _vars_block(p):
     return f"""
@@ -640,18 +670,22 @@ def ver_rutinas():
             peso      = e.get("peso","")
             tiempo    = e.get("tiempo","")
             velocidad = e.get("velocidad","")
-            rir_val   = e.get("rir")
 
             # 1) Video (puede venir en e['video'] o dentro de 'detalle' como link)
             video_url, detalle_visible = _video_y_detalle_desde_ejercicio(e)
 
-            # 2) Línea secundaria: reps/peso/tiempo/descanso/velocidad (SIN RIR)
+            # 2) Línea secundaria: reps/peso/tiempo/descanso/velocidad/RIR
             partes = [f"{_repstr(e)}"]
             if peso:      partes.append(f"{peso} kg")
             if tiempo:    partes.append(f"{tiempo} seg")
             if velocidad: partes.append(f"{velocidad} m/s")
             dsc = _descanso_texto(e)
             if dsc:       partes.append(f"{dsc}")
+
+            rir_text = _rirstr(e)           # ← usa la nueva función
+            if rir_text:
+                partes.append(f"RIR {rir_text}")
+
             info_str = " · ".join(partes)
 
             # 3) Contenedor visual
@@ -662,7 +696,6 @@ def ver_rutinas():
             mostrar_video_key = f"mostrar_video_{cliente_sel}_{semana_sel}_{circuito}_{idx}"
 
             if video_url:
-                # nombre como botón (ajustado al texto, no ocupa todo el ancho)
                 titulo_btn = nombre if not detalle_visible else f"{nombre} — {detalle_visible}"
                 btn_clicked = st.button(
                     titulo_btn,
@@ -673,24 +706,18 @@ def ver_rutinas():
                 if btn_clicked:
                     st.session_state[mostrar_video_key] = not st.session_state.get(mostrar_video_key, False)
             else:
-                # nombre como texto (si no hay link en detalle, lo mostramos normal)
                 titulo_linea = nombre + (f" — {detalle_visible}" if detalle_visible else "")
                 st.markdown(
                     f"<div style='font-weight:800;font-size:1.05rem;color:var(--text-main);'>{titulo_linea}</div>",
                     unsafe_allow_html=True
                 )
 
-            # 3.b) Línea de detalles (reps/peso/descanso/velocidad)
+            # 3.b) Línea de detalles (incluye ahora también el RIR)
             st.markdown(f"<div class='muted' style='margin-top:2px;'>{info_str}</div>", unsafe_allow_html=True)
 
-            # 3.c) RIR en una fila aparte
-            if rir_val:
-                st.markdown(f"<div class='muted' style='margin-top:2px;'>RIR {rir_val}</div>", unsafe_allow_html=True)
-
-            # 3.d) Mostrar video embebido si está activo
+            # 3.c) Mostrar video embebido si está activo
             if video_url and st.session_state.get(mostrar_video_key, False):
                 url = video_url
-                # Normalizar Shorts de YouTube
                 if "youtube.com/shorts/" in url:
                     try:
                         video_id = url.split("shorts/")[1].split("?")[0]
