@@ -1,4 +1,4 @@
-# guardar_rutina_view.py — progresión acumulativa + soporte "descanso"
+# guardar_rutina_view.py — progresión acumulativa + RIR min/max + soporte "descanso" + series como progresión + fallbacks
 from firebase_admin import firestore
 from datetime import timedelta
 from herramientas import aplicar_progresion, normalizar_texto
@@ -35,13 +35,7 @@ def parsear_semanas(semanas_txt: str) -> list[int]:
 # Progresión acumulativa
 # -------------------------
 def aplicar_acumulado_escalar(valor_base, cantidad, operacion, semanas_a_aplicar, semana_objetivo: int):
-    """
-    Devuelve el valor para 'semana_objetivo' aplicando progresión ACUMULATIVA.
-    Semana 1 = base. Desde la 2, aplica solo si 'wk' ∈ semanas_a_aplicar.
-    """
-    if _s(valor_base) == "":
-        return valor_base
-
+    """Aplica acumulado semana a semana desde la semana 2 hasta la semana objetivo (incluida si corresponde)."""
     acumulado = valor_base
     for wk in range(2, semana_objetivo + 1):
         if wk in semanas_a_aplicar:
@@ -76,9 +70,6 @@ def aplicar_acumulado_rango(min_base, max_base, cantidad, operacion, semanas_a_a
             min_acc = operar(min_acc, cantidad, operacion)
             max_acc = operar(max_acc, cantidad, operacion)
 
-    # Si quieres enteros:
-    # min_acc = None if min_acc is None or _s(min_acc)=="" else int(round(min_acc))
-    # max_acc = None if max_acc is None or _s(max_acc)=="" else int(round(max_acc))
     return min_acc, max_acc
 
 # -------------------------
@@ -87,8 +78,8 @@ def aplicar_acumulado_rango(min_base, max_base, cantidad, operacion, semanas_a_a
 def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, objetivo: str | None = None):
     """
     Genera X semanas y aplica progresiones de forma ACUMULATIVA.
-    Soporta variables escalares: peso, rir, tiempo, velocidad, descanso.
-    Soporta rango: repeticiones (min/max).
+    Escalares: peso, tiempo, velocidad, descanso, series.
+    Rangos: repeticiones (min/max) y RIR (min/max).
     """
     db = firestore.client()
     bloque_id = str(uuid.uuid4())
@@ -108,13 +99,13 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                 "fecha_lunes": fecha_str,
                 "entrenador": _s(entrenador),
                 "bloque_rutina": bloque_id,
+                "objetivo": _s(objetivo or ""),
                 "rutina": {}
             }
-            if objetivo and _s(objetivo):
-                rutina_semana["objetivo"] = _s(objetivo)
 
-            for i, _dia_nombre in enumerate(dias):
-                numero_dia = str(i + 1)
+            # Recorre los días definidos en la UI (Día 1..5)
+            for i, _dia_label in enumerate(dias):
+                numero_dia = i + 1
                 lista_ejercicios = []
 
                 for seccion in ["Warm Up", "Work Out"]:
@@ -126,14 +117,45 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                             continue
 
                         # 1) Bases Semana 1
-                        base_peso      = _f(ejercicio.get("Peso", ""))
-                        base_rir       = _f(ejercicio.get("RIR", ""))
-                        base_tiempo    = _f(ejercicio.get("Tiempo", ""))
-                        base_velocidad = _f(ejercicio.get("Velocidad", ""))
-                        base_descanso  = _f(ejercicio.get("Descanso", ""))   # 👈 NUEVO
+                        base_peso       = _f(ejercicio.get("Peso", ""))
+                        base_tiempo     = _f(ejercicio.get("Tiempo", ""))
+                        base_velocidad  = _f(ejercicio.get("Velocidad", ""))
+                        base_descanso   = _f(ejercicio.get("Descanso", ""))
+                        base_reps_min   = _f(ejercicio.get("RepsMin", ""))
+                        base_reps_max   = _f(ejercicio.get("RepsMax", ""))
+                        base_rir_min    = _f(ejercicio.get("RirMin", ""))
+                        base_rir_max    = _f(ejercicio.get("RirMax", ""))
 
-                        base_reps_min  = _f(ejercicio.get("RepsMin", ""))
-                        base_reps_max  = _f(ejercicio.get("RepsMax", ""))
+                        # Fallbacks por compatibilidad (formatos antiguos):
+                        # - Si viene 'Repeticiones' como '8-10' o '10', parsea a RepsMin/RepsMax
+                        rep_raw = _s(ejercicio.get("Repeticiones", ""))
+                        if (base_reps_min is None and base_reps_max is None) and rep_raw:
+                            if "-" in rep_raw:
+                                try:
+                                    mn, mx = rep_raw.split("-", 1)
+                                    base_reps_min = _f(mn)
+                                    base_reps_max = _f(mx)
+                                except Exception:
+                                    pass
+                            else:
+                                v = _f(rep_raw)
+                                base_reps_min = v
+                                base_reps_max = v
+
+                        # - Si viene 'RIR' como '2-3' o '3', parsea a RirMin/RirMax
+                        rir_raw = _s(ejercicio.get("RIR", ""))
+                        if (base_rir_min is None and base_rir_max is None) and rir_raw:
+                            if "-" in rir_raw:
+                                try:
+                                    mn, mx = rir_raw.split("-", 1)
+                                    base_rir_min = _f(mn)
+                                    base_rir_max = _f(mx)
+                                except Exception:
+                                    pass
+                            else:
+                                v = _f(rir_raw)
+                                base_rir_min = v
+                                base_rir_max = v
 
                         # 2) Reglas (hasta 3)
                         reglas = []
@@ -145,25 +167,38 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                                 "semanas": parsear_semanas(ejercicio.get(f"Semanas_{p}", "")),
                             })
 
-                        # Escalares
                         def acum_scalar(nombre_var, base_val):
+                            """Aplica progresión acumulativa para un escalar si hay una regla que lo afecta."""
                             val = base_val
-                            if _s(base_val) == "":
-                                return base_val
                             for r in reglas:
                                 if r["var"] == nombre_var and r["cantidad"] not in (None, "") and r["op"]:
-                                    val = aplicar_acumulado_escalar(
-                                        val, r["cantidad"], r["op"], r["semanas"], semana_actual
-                                    )
+                                    val = aplicar_acumulado_escalar(val, r["cantidad"], r["op"], r["semanas"], semana_actual)
                             return val
 
+                        # Escalares
                         peso      = acum_scalar("peso", base_peso)
-                        rir       = acum_scalar("rir", base_rir)
                         tiempo    = acum_scalar("tiempo", base_tiempo)
                         velocidad = acum_scalar("velocidad", base_velocidad)
-                        descanso  = acum_scalar("descanso", base_descanso)  # 👈 NUEVO
+                        descanso  = acum_scalar("descanso", base_descanso)
 
-                        # Rango repeticiones
+                        # Series como escalar (opcional)
+                        try:
+                            base_series_val = _f(ejercicio.get("Series", ""))
+                        except Exception:
+                            base_series_val = None
+                        series_val = base_series_val
+                        for r in reglas:
+                            if r["var"] == "series" and r["cantidad"] not in (None, "") and r["op"]:
+                                series_val = aplicar_acumulado_escalar(series_val, r["cantidad"], r["op"], r["semanas"], semana_actual)
+
+                        # Rangos: RIR y Repeticiones
+                        rir_min, rir_max = base_rir_min, base_rir_max
+                        for r in reglas:
+                            if r["var"] == "rir" and r["cantidad"] not in (None, "") and r["op"]:
+                                rir_min, rir_max = aplicar_acumulado_rango(
+                                    rir_min, rir_max, r["cantidad"], r["op"], r["semanas"], semana_actual
+                                )
+
                         reps_min, reps_max = base_reps_min, base_reps_max
                         for r in reglas:
                             if r["var"] == "repeticiones" and r["cantidad"] not in (None, "") and r["op"]:
@@ -172,7 +207,7 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                                 )
 
                         # 3) Empaquetar ejercicio
-                        series     = _f(ejercicio.get("Series", ""))
+                        series     = series_val if series_val is not None else _f(ejercicio.get("Series", ""))
                         nombre_ej  = _s(ejercicio.get("Ejercicio", ""))
                         detalle    = _s(ejercicio.get("Detalle", ""))
                         tipo       = _s(ejercicio.get("Tipo", ""))
@@ -191,8 +226,9 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                             "peso":       peso,
                             "tiempo":     tiempo,
                             "velocidad":  velocidad,
-                            "descanso":   descanso,   # 👈 NUEVO (se guarda)
-                            "rir":        rir,
+                            "descanso":   descanso,
+                            "rir_min":    rir_min,
+                            "rir_max":    rir_max,
                             "tipo":       tipo,
                             "video":      video_link
                         })
@@ -204,6 +240,6 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                 doc_id = f"{correo_norm}_{fecha_norm}"
                 db.collection("rutinas_semanales").document(doc_id).set(rutina_semana)
 
-        st.success(f"✅ Rutina generada correctamente para {semanas} semanas (progresión acumulativa + descanso).")
+        st.success(f"✅ Rutina generada correctamente para {semanas} semanas (progresión acumulativa + descanso + RIR min/max + series).")
     except Exception as e:
         st.error(f"❌ Error al guardar la rutina: {e}")
