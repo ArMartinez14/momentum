@@ -151,12 +151,21 @@ def combo_con_agregar(titulo: str, opciones: list[str], key_base: str, valor_ini
             if st.button("Guardar", key=f"{key_base}_guardar", type="primary"):
                 valor_limpio = (nuevo or "").strip()
                 if valor_limpio:
-                    if "Característica" in titulo:
+                    t = titulo.lower()
+                    if "característica" in t or "caracteristica" in t:
                         tipo = "caracteristicas"
-                    elif "Patrón" in titulo or "Patron" in titulo:
+                    elif "patrón" in t or "patron" in t:
                         tipo = "patrones_movimiento"
-                    else:
+                    elif "grupo muscular secundario" in t:
+                        tipo = "grupo_muscular_secundario"
+                    elif "grupo muscular principal" in t:
                         tipo = "grupo_muscular_principal"
+                    elif "marca" in t:
+                        tipo = "marcas"
+                    elif "máquina" in t or "maquina" in t:
+                        tipo = "maquinas"
+                    else:
+                        tipo = "otros_catalogos"
                     add_item(tipo, valor_limpio)
                     st.success(f"Agregado: {valor_limpio}")
                     st.rerun()
@@ -171,6 +180,45 @@ def combo_con_agregar(titulo: str, opciones: list[str], key_base: str, valor_ini
 def _cb_normalizar_correo(key_name: str):
     raw = st.session_state.get(key_name, "")
     st.session_state[key_name] = normalizar_correo(raw)
+def _norm(s: str) -> str:
+    """Normaliza para comparar: sin acentos, trim, casefold."""
+    import unicodedata, re
+    s = str(s or "")
+    s = unicodedata.normalize("NFKD", s).encode("ASCII", "ignore").decode("utf-8")
+    s = re.sub(r"\s+", " ", s).strip().casefold()
+    return s
+
+def _resolver_id_implemento(db, marca: str, maquina: str) -> str:
+    """Devuelve el id_implemento si hay match único por marca+maquina; si no, ''."""
+    marca_in = (marca or "").strip()
+    maquina_in = (maquina or "").strip()
+    if not marca_in or not maquina_in:
+        return ""
+
+    # 1) Intento exacto (si no hay índice o falla, seguimos)
+    try:
+        q = (db.collection("implementos")
+               .where("marca", "==", marca_in)
+               .where("maquina", "==", maquina_in))
+        hits = list(q.stream())
+        if len(hits) == 1:
+            return hits[0].id
+        elif len(hits) >= 2:
+            return ""  # ambiguo
+    except Exception:
+        pass
+
+    # 2) Fallback normalizado en memoria (colección chica/mediana)
+    mkey, maqkey = _norm(marca_in), _norm(maquina_in)
+    try:
+        candidatos = []
+        for d in db.collection("implementos").limit(1000).stream():
+            data = d.to_dict() or {}
+            if _norm(data.get("marca")) == mkey and _norm(data.get("maquina")) == maqkey:
+                candidatos.append(d.id)
+        return candidatos[0] if len(candidatos) == 1 else ""
+    except Exception:
+        return ""
 
 # ==========================
 # 🔁 Navegación (menu / cliente / ejercicio)
@@ -331,16 +379,21 @@ def _render_ejercicio():
 
     # === catálogos ===
     cat = get_catalogos()
-    catalogo_carac  = cat.get("caracteristicas", [])
-    catalogo_patron = cat.get("patrones_movimiento", [])
-    catalogo_grupo  = cat.get("grupo_muscular_principal", [])
+    catalogo_carac   = cat.get("caracteristicas", [])
+    catalogo_patron  = cat.get("patrones_movimiento", [])
+    catalogo_grupo_p = cat.get("grupo_muscular_principal", [])
+    catalogo_grupo_s = cat.get("grupo_muscular_secundario", [])
+    catalogo_marcas  = cat.get("marcas", [])
+    catalogo_maquinas= cat.get("maquinas", [])
 
-    # === FORMULARIO ===
+    # === # === FORMULARIO ===
     col1, col2 = st.columns(2)
     with col1:
-        implemento = st.text_input("Implemento:", value=datos.get("implemento", ""), key="implemento")
+        marca = st.text_input("Marca (opcional):", value=datos.get("marca", ""), key="marca").strip()
     with col2:
-        detalle = st.text_input("Detalle:", value=datos.get("detalle", ""), key="detalle")
+        maquina = st.text_input("Máquina (opcional):", value=datos.get("maquina", ""), key="maquina").strip()
+
+    detalle = st.text_input("Detalle:", value=datos.get("detalle", ""), key="detalle")
 
     col3, col4 = st.columns(2)
     with col3:
@@ -351,21 +404,48 @@ def _render_ejercicio():
             valor_inicial=datos.get("caracteristica", "")
         )
     with col4:
-        grupo = combo_con_agregar(
-            "Grupo muscular principal",
-            catalogo_grupo,
-            key_base="grupo",
-            valor_inicial=datos.get("grupo_muscular_principal", "")
+        patron = combo_con_agregar(
+            "Patrón de Movimiento",
+            catalogo_patron,
+            key_base="patron",
+            valor_inicial=datos.get("patron_de_movimiento", "")
         )
 
-    patron = combo_con_agregar(
-        "Patrón de movimiento",
-        catalogo_patron,
-        key_base="patron",
-        valor_inicial=datos.get("patron_de_movimiento", "")
-    )
+    col5, col6 = st.columns(2)
+    with col5:
+        grupo_p = combo_con_agregar(
+            "Grupo Muscular Principal",
+            catalogo_grupo_p,
+            key_base="grupo_p",
+            valor_inicial=datos.get("grupo_muscular_principal", "")
+        )
+    with col6:
+        grupo_s = combo_con_agregar(
+            "Grupo Muscular Secundario",
+            catalogo_grupo_s,
+            key_base="grupo_s",
+            valor_inicial=datos.get("grupo_muscular_secundario", "")
+        )
+    # Preview de implemento/pesos si hay marca+máquina
+    if marca and maquina:
+        _id_prev = _resolver_id_implemento(db, marca, maquina)
+        if _id_prev:
+            snap_impl = db.collection("implementos").document(str(_id_prev)).get()
+            if snap_impl.exists:
+                data_impl = snap_impl.to_dict() or {}
+                st.success(f"Implemento detectado: ID **{_id_prev}** · {data_impl.get('marca','')} – {data_impl.get('maquina','')}")
+                pesos = data_impl.get("pesos", [])
+                if isinstance(pesos, dict):
+                    pesos_list = [v for _, v in sorted(pesos.items(), key=lambda kv: int(kv[0]))]
+                elif isinstance(pesos, list):
+                    pesos_list = pesos
+                else:
+                    pesos_list = []
+                if pesos_list:
+                    st.caption("Pesos disponibles (preview): " + ", ".join(str(p) for p in pesos_list))
 
-    nombre_ej = f"{implemento.strip()} {detalle.strip()}".strip()
+    # Nombre visible
+    nombre_ej = " ".join([x for x in [marca, maquina, detalle] if x]).strip()
     st.text_input("Nombre completo del ejercicio:", value=nombre_ej, key="nombre", disabled=True)
 
     publico_default = True if admin else False
@@ -374,50 +454,69 @@ def _render_ejercicio():
     cols_btn2 = st.columns([1,3])
     with cols_btn2[0]:
         if st.button("💾 Guardar Ejercicio", key="btn_guardar_ejercicio", type="primary"):
-            if not nombre_ej:
-                st.warning("⚠️ El campo 'nombre' es obligatorio.")
-                st.markdown("</div>", unsafe_allow_html=True)
-                return
-
-            datos_guardar = {
-                "nombre": nombre_ej,
-                "caracteristica": caracteristica,
-                "detalle": detalle,
-                "grupo_muscular_principal": grupo,
-                "implemento": implemento,
-                "patron_de_movimiento": patron,
-                "actualizado_por": correo_usuario,
-                "fecha_actualizacion": datetime.utcnow(),
-                "publico": bool(publico_check),
-            }
-
-            faltantes = [k for k, v in {
+            # Validaciones mínimas
+            faltantes = [etq for etq, val in {
                 "Característica": caracteristica,
-                "Grupo muscular principal": grupo,
-                "Patrón de movimiento": patron
-            }.items() if not (v or "").strip()]
+                "Patrón de Movimiento": patron,
+                "Grupo Muscular Principal": grupo_p
+            }.items() if not (val or "").strip()]
+
 
             if faltantes:
                 st.warning("⚠️ Completa: " + ", ".join(faltantes))
                 st.markdown("</div>", unsafe_allow_html=True)
                 return
 
+            nombre_final = (nombre_ej or datos.get("nombre") or detalle or maquina or marca or "").strip()
+            if not nombre_final:
+                st.warning("⚠️ El campo 'nombre' es obligatorio (usa al menos Detalle/Máquina/Marca).")
+                st.markdown("</div>", unsafe_allow_html=True)
+                return
+
+            # === Resolver id_implemento SOLO AL GUARDAR ===
+            id_impl_resuelto = _resolver_id_implemento(db, marca, maquina)
+
+            # Si estás editando: conserva el id previo si Marca/Máquina no cambiaron
+            if modo == "Editar ejercicio existente" and doc_id_sel:
+                marca_prev   = (datos.get("marca") or "").strip()
+                maquina_prev = (datos.get("maquina") or "").strip()
+                if _norm(marca_prev) == _norm(marca) and _norm(maquina_prev) == _norm(maquina):
+                    id_impl_final = (datos.get("id_implemento") or "")
+                else:
+                    id_impl_final = id_impl_resuelto  # recalculado por cambio
+            else:
+                id_impl_final = id_impl_resuelto  # nuevo ejercicio
+
+            datos_guardar = {
+                "nombre": nombre_final,
+                "marca": marca,
+                "maquina": maquina,
+                "detalle": detalle,
+                "caracteristica": caracteristica,
+                "patron_de_movimiento": patron,
+                "grupo_muscular_principal": grupo_p,
+                "grupo_muscular_secundario": grupo_s or "",
+                "id_implemento": id_impl_final,   # ← requerido
+                "actualizado_por": correo_usuario,
+                "fecha_actualizacion": datetime.utcnow(),
+                "publico": bool(publico_check),
+            }
+
             try:
                 if modo == "Editar ejercicio existente" and doc_id_sel:
-                    entrenador_original = datos.get("entrenador")
-                    if not entrenador_original:
+                    if not datos.get("entrenador"):
                         datos_guardar["entrenador"] = correo_usuario  # backfill si faltaba
                     db.collection("ejercicios").document(doc_id_sel).update(datos_guardar)
                     st.success(f"✅ Ejercicio '{datos.get('nombre', doc_id_sel)}' actualizado correctamente")
                 else:
-                    doc_id = normalizar_texto(nombre_ej)
+                    doc_id = normalizar_texto(nombre_final)
                     db.collection("ejercicios").document(doc_id).set({
                         **datos_guardar,
                         "creado_por": correo_usuario,
                         "fecha_creacion": datetime.utcnow(),
                         "entrenador": correo_usuario,
                     }, merge=True)
-                    st.success(f"✅ Ejercicio '{nombre_ej}' guardado correctamente")
+                    st.success(f"✅ Ejercicio '{nombre_final}' guardado correctamente")
 
                 if datos_guardar["publico"]:
                     st.info("Este ejercicio es **público** y será visible para todos los entrenadores.")
