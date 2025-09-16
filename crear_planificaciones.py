@@ -594,118 +594,105 @@ def crear_rutinas():
                         value=st.session_state.get(f"show_desc_{key_seccion}", False),
                     )
                 
-                # --- Botón/Popover: "＋" Crear ejercicio (encabezado de sección) ---
                 # --- Botón/Popover: "＋" Crear ejercicio (encabezado de sección) con permisos ---
                 if _tiene_permiso_agregar():
-                    with head_cols[4].popover("＋", use_container_width=True):
+                    pop = head_cols[4].popover("＋", use_container_width=True)  # ← sin key
+                    with pop:
                         st.markdown("**Nuevo ejercicio**")
-                        # (deja aquí todo el contenido que ya tienes para crear el ejercicio)
-                else:
-                    head_cols[4].button("＋", use_container_width=True, disabled=True)
-                    st.caption("Solo *Administrador* o *Entrenador* pueden crear ejercicios.")
 
+                        # Cargar catálogos
+                        try:
+                            cat = get_catalogos()
+                        except Exception as e:
+                            st.error(f"No pude cargar catálogos: {e}")
+                            cat = {"caracteristicas": [], "patrones_movimiento": [], "grupo_muscular_principal": []}
 
-                    # Cargar catálogos (como en admin)
-                    cat = get_catalogos()
-                    catalogo_carac  = cat.get("caracteristicas", [])
-                    catalogo_patron = cat.get("patrones_movimiento", [])
-                    catalogo_grupo  = cat.get("grupo_muscular_principal", [])
+                        catalogo_carac  = cat.get("caracteristicas", []) or []
+                        catalogo_patron = cat.get("patrones_movimiento", []) or []
+                        catalogo_grupo  = cat.get("grupo_muscular_principal", []) or []
 
-                    # Helper local: select con opción "➕ Agregar nuevo…"
-                    def _combo_con_agregar(label: str, opciones: list[str], key_base: str) -> str:
-                        SENT = "➕ Agregar nuevo…"
-                        opts = ["— Selecciona —"] + sorted(opciones or []) + [SENT]
-                        sel = st.selectbox(label, opts, key=f"{key_base}_sel_{key_seccion}")
-                        if sel == SENT:
-                            nuevo = st.text_input(f"Ingresar nuevo valor para {label.lower()}:", key=f"{key_base}_nuevo_{key_seccion}")
-                            cols_add = st.columns([1,3])
-                            if cols_add[0].button("Agregar", key=f"{key_base}_btn_{key_seccion}", type="secondary", use_container_width=True):
-                                valor = (nuevo or "").strip()
-                                if valor:
-                                    tipo = "caracteristicas" if "Caracter" in label else \
-                                        "patrones_movimiento" if "Patr" in label else \
-                                        "grupo_muscular_principal"
-                                    add_item(tipo, valor)
-                                    st.success(f"Agregado: {valor}")
-                                    st.rerun()
-                            return ""  # mientras se agrega, no devolvemos selección
-                        return "" if sel in ("", "— Selecciona —") else sel
+                        # Helper: select con “agregar nuevo…”
+                        def _combo_con_agregar(label: str, opciones: list[str], key_base: str) -> str:
+                            SENT = "➕ Agregar nuevo…"
+                            opts = ["— Selecciona —"] + sorted(opciones or []) + [SENT]
+                            sel = st.selectbox(label, opts, key=f"{key_base}_sel_{key_seccion}")
+                            if sel == SENT:
+                                nuevo = st.text_input(f"Ingresar nuevo valor para {label.lower()}:", key=f"{key_base}_nuevo_{key_seccion}")
+                                cols_add = st.columns([1,3])
+                                if cols_add[0].button("Agregar", key=f"{key_base}_btn_{key_seccion}", type="secondary", use_container_width=True):
+                                    valor = (nuevo or "").strip()
+                                    if valor:
+                                        tipo = "caracteristicas" if "Caracter" in label else \
+                                            "patrones_movimiento" if "Patr" in label else \
+                                            "grupo_muscular_principal"
+                                        add_item(tipo, valor)
+                                        st.success(f"Agregado: {valor}")
+                                        st.cache_data.clear()
+                                        st.rerun()
+                                return ""
+                            return "" if sel in ("", "— Selecciona —") else sel
 
-                    # Prefill de detalle con la última búsqueda de ESTA sección (si existe)
-                    _prefill = ""
-                    _prefix_busca = f"buscar_{i}_{seccion.replace(' ','_')}_"
-                    try:
-                        for k, v in st.session_state.items():
-                            if isinstance(v, str) and k.startswith(_prefix_busca) and v.strip():
-                                _prefill = v.strip()
-                                break
-                    except Exception:
-                        pass
+                        # Prefill usando última búsqueda en esta sección
+                        _prefill = ""
+                        _prefix_busca = f"buscar_{i}_{seccion.replace(' ','_')}_"
+                        try:
+                            for k, v in st.session_state.items():
+                                if isinstance(v, str) and k.startswith(_prefix_busca) and v.strip():
+                                    _prefill = v.strip()
+                                    break
+                        except Exception:
+                            pass
 
-                    # Campos principales (como en admin)
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        implemento = st.text_input("Implemento:", key=f"impl_top_{key_seccion}")
-                    with col2:
-                        detalle = st.text_input("Detalle:", value=_prefill, key=f"det_top_{key_seccion}")
+                        # Campos principales
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            implemento = st.text_input("Implemento:", key=f"impl_top_{key_seccion}")
+                        with col2:
+                            detalle = st.text_input("Detalle:", value=_prefill, key=f"det_top_{key_seccion}")
 
-                    caracteristica = _combo_con_agregar("Característica", catalogo_carac,  "carac_top")
-                    grupo          = _combo_con_agregar("Grupo muscular principal", catalogo_grupo, "grupo_top")
-                    patron         = _combo_con_agregar("Patrón de movimiento", catalogo_patron, "patron_top")
+                        caracteristica = _combo_con_agregar("Característica", catalogo_carac,  "carac_top")
+                        grupo          = _combo_con_agregar("Grupo muscular principal", catalogo_grupo, "grupo_top")
+                        patron         = _combo_con_agregar("Patrón de movimiento", catalogo_patron, "patron_top")
 
-                    # Extra: video (opcional) que tu UI usa para el check de "Video?"
-                    video = st.text_input("URL de video (opcional)", key=f"video_top_{key_seccion}", placeholder="https://youtu.be/…")
+                        video = st.text_input("URL de video (opcional)", key=f"video_top_{key_seccion}", placeholder="https://youtu.be/…")
 
-                    # Nombre compuesto (como en admin)
-                    nombre_ej = f"{(implemento or '').strip()} {(detalle or '').strip()}".strip()
-                    st.text_input("Nombre completo del ejercicio:", value=nombre_ej, key=f"nombre_top_{key_seccion}", disabled=True)
+                        nombre_ej = f"{(implemento or '').strip()} {(detalle or '').strip()}".strip()
+                        st.text_input("Nombre completo del ejercicio:", value=nombre_ej, key=f"nombre_top_{key_seccion}", disabled=True)
 
-                    # Visibilidad según rol (admin puede marcar público)
-                    publico_default = True if es_admin() else False
-                    publico_check = st.checkbox("Hacer público (visible para todos)", value=publico_default, key=f"pub_chk_{key_seccion}")
+                        publico_default = True if es_admin() else False
+                        publico_check = st.checkbox("Hacer público (visible para todos)", value=publico_default, key=f"pub_chk_{key_seccion}")
 
-                    # Guardar (estamos fuera de cualquier form => podemos usar button)
-                    if st.button("Guardar ejercicio", key=f"btn_guardar_top_{key_seccion}", type="primary", use_container_width=True):
-                        if not nombre_ej:
-                            st.warning("⚠️ El campo 'Nombre completo' es obligatorio.")
-                        else:
-                            faltantes = [t for t, v in {
-                                "Característica": caracteristica,
-                                "Grupo muscular principal": grupo,
-                                "Patrón de movimiento": patron
-                            }.items() if not (v or "").strip()]
-                            if faltantes:
-                                st.warning("⚠️ Completa: " + ", ".join(faltantes))
+                        if st.button("Guardar ejercicio", key=f"btn_guardar_top_{key_seccion}", type="primary", use_container_width=True):
+                            if not nombre_ej:
+                                st.warning("⚠️ El campo 'Nombre completo' es obligatorio.")
                             else:
-                                # Payload compatible con tu helper guardar_ejercicio_firestore()
-                                payload = {
-                                    "video": (video or "").strip(),
-                                    "caracteristica": caracteristica,
-                                    "detalle": detalle,
-                                    "grupo_muscular_principal": grupo,
-                                    "implemento": implemento,
-                                    "patron_de_movimiento": patron,
-                                    "publico_flag": bool(publico_check),  # lo convierte a 'publico' internamente
-                                }
-                                try:
-                                    # Guarda en 'ejercicios' con reglas por rol (admin/entrenador)
-                                    guardar_ejercicio_firestore(nombre_ej, payload)
-
-                                    # Refrescar cache local para que aparezca de inmediato en los selectbox
-                                    ejercicios_dict[nombre_ej] = {
-                                        "video": payload["video"],
+                                faltantes = [t for t, v in {
+                                    "Característica": caracteristica,
+                                    "Grupo muscular principal": grupo,
+                                    "Patrón de movimiento": patron
+                                }.items() if not (v or "").strip()]
+                                if faltantes:
+                                    st.warning("⚠️ Completa: " + ", ".join(faltantes))
+                                else:
+                                    payload = {
+                                        "video": (video or "").strip(),
+                                        "caracteristica": caracteristica,
+                                        "detalle": detalle,
                                         "grupo_muscular_principal": grupo,
                                         "implemento": implemento,
                                         "patron_de_movimiento": patron,
-                                        "caracteristica": caracteristica,
-                                        "detalle": detalle,
+                                        "publico_flag": bool(publico_check),
                                     }
-
-                                    st.success(f"✅ Ejercicio '{nombre_ej}' guardado.")
-                                    st.rerun()
-                                    st.cache_data.clear()
-                                except Exception as e:
-                                    st.error(f"❌ Error al guardar: {e}")
+                                    try:
+                                        guardar_ejercicio_firestore(nombre_ej, payload)
+                                        st.success(f"✅ Ejercicio '{nombre_ej}' guardado.")
+                                        st.cache_data.clear()   # ← limpiar caches antes de recargar
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"❌ Error al guardar: {e}")
+                else:
+                    head_cols[4].button("＋", use_container_width=True, disabled=True, key=f"btn_plus_disabled_{key_seccion}")
+                    st.caption("Solo *Administrador* o *Entrenador* pueden crear ejercicios.")
 
                 # ======= Construcción dinámica de columnas =======
                 headers = BASE_HEADERS.copy()
