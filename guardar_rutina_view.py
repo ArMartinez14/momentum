@@ -234,7 +234,7 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                         })
 
                 if lista_ejercicios:
-                    rutina_semana["rutina"][numero_dia] = lista_ejercicios
+                    rutina_semana["rutina"][str(numero_dia)] = lista_ejercicios
 
             if rutina_semana["rutina"]:
                 doc_id = f"{correo_norm}_{fecha_norm}"
