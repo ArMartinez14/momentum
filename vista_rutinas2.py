@@ -2,191 +2,54 @@
 from __future__ import annotations
 
 import streamlit as st
-from firebase_admin import firestore
+import firebase_admin
+from firebase_admin import credentials, firestore
 from datetime import datetime, timedelta, date
 import json, random, re, math
 from io import BytesIO
 import matplotlib.pyplot as plt
 import time
-from app_core.firebase_client import get_db
-from app_core.theme import inject_theme
+from soft_login_full import soft_login_barrier
+soft_login_full = soft_login_barrier(required_roles=["entrenador", "deportista", "admin"])
 
 # ==========================
 #  PALETA / ESTILOS con soporte claro/oscuro
 # ==========================
-control_bar = st.container()
-with control_bar:
-    control_cols = st.columns([4, 1])
-    with control_cols[1]:
-        theme_mode = st.selectbox(
-            "🎨 Tema",
-            ["Auto", "Oscuro", "Claro"],
-            key="theme_mode_vista_rutinas",
-            help="'Auto' sigue el modo del sistema; 'Oscuro/Claro' fuerzan los colores.",
-            label_visibility="collapsed",
-        )
+import streamlit as st
 
-st.markdown(
-    """
-    <style>
-    .status-card {
-        background: #0b1018;
-        border: 1px solid rgba(15, 23, 42, 0.7);
-        border-radius: 18px;
-        padding: 20px 22px;
-        margin-bottom: 16px;
-        box-shadow: 0 8px 24px rgba(8, 15, 26, 0.2);
-        color: #e2e8f0;
-    }
-    .status-card__message {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        color: #e2e8f0;
-    }
-    .status-card__greet {
-        font-size: 1rem;
-        font-weight: 600;
-    }
-    .status-card__title {
-        font-size: 1.28rem;
-        font-weight: 800;
-    }
-    .status-card__label {
-        font-size: 0.72rem;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-        color: rgba(148, 163, 184, 0.75);
-        display: inline-block;
-        margin-bottom: 4px;
-    }
-    .status-card__range {
-        margin-top: 12px;
-        font-size: 0.9rem;
-        font-weight: 600;
-        color: rgba(148, 163, 184, 0.75);
-    }
-    .summary-card {
-        background: linear-gradient(135deg, rgba(52, 211, 153, 0.18), rgba(16, 185, 129, 0.22));
-        border: 1px solid rgba(16, 185, 129, 0.45);
-        border-radius: 16px;
-        padding: 16px 20px;
-        margin: 10px 0 22px;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        box-shadow: 0 12px 36px rgba(16, 185, 129, 0.25);
-        color: #052019;
-    }
-    .summary-card__title {
-        font-weight: 800;
-        font-size: 1.05rem;
-        color: #052019;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    .summary-card__meta {
-        font-size: 0.96rem;
-        color: #064e3b;
-    }
-    .summary-card__meta.muted {
-        color: rgba(6, 78, 59, 0.7);
-    }
-    .planner-card {
-        background: var(--surface);
-        border: 1px solid var(--stroke);
-        border-radius: 18px;
-        padding: 18px 22px;
-        margin: 12px 0 22px;
-    }
-    .planner-card__body {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        align-items: center;
-        text-align: center;
-    }
-    .planner-card__motivation {
-        font-size: 0.95rem;
-        font-weight: 600;
-        color: var(--success);
-    }
-    .planner-card__range {
-        font-size: 1.12rem;
-        font-weight: 700;
-    }
-    .planner-card__meta {
-        font-size: 0.92rem;
-        color: var(--text-main);
-    }
-    .planner-card__meta.muted {
-        color: var(--muted);
-    }
-    .planner-card__badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 12px;
-        border-radius: 999px;
-        background: rgba(0, 194, 255, 0.18);
-        color: var(--primary);
-        font-weight: 600;
-        width: fit-content;
-    }
-    .planner-card__note {
-        font-size: 0.84rem;
-        color: var(--muted);
-    }
-    .planner-card__label {
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--muted);
-        display: block;
-        margin-bottom: 6px;
-    }
-    .planner-card__badge.is-active {
-        background: linear-gradient(135deg, rgba(0,194,255,0.2), rgba(34,197,94,0.25));
-        border: 1px solid rgba(34,197,94,0.45);
-        color: #10b981;
-    }
-    .days-subtitle {
-        margin: 18px 0 12px;
-        font-size: 0.92rem;
-        font-weight: 600;
-        color: rgba(14, 165, 233, 0.8);
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-    }
-    div[data-testid="stButton"][data-key^="daybtn_"] button {
-        width: 100%;
-        border-radius: 14px;
-        padding: 14px 16px;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 4px;
-        white-space: pre-line;
-        box-shadow: 0 8px 24px rgba(56, 189, 248, 0.18);
-    }
-    div[data-testid="stButton"][data-key^="daybtn_"] button[kind="secondary"] {
-        background: linear-gradient(135deg, rgba(23, 37, 84, 0.85), rgba(30, 64, 175, 0.85)) !important;
-        color: #f8fafc !important;
-    }
-    div[data-testid="stButton"][data-key^="daybtn_"] button[kind="primary"] {
-        background: linear-gradient(135deg, rgba(239, 68, 68, 0.9), rgba(244, 114, 182, 0.85)) !important;
-        color: #fff5f5 !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
+# Paleta modo oscuro (la tuya actual, con terracota)
+DARK = dict(
+    PRIMARY   ="#00C2FF",
+    SUCCESS   ="#22C55E",
+    WARNING   ="#F59E0B",
+    DANGER    ="#E2725B",   # ← rojo terracota
+    BG        ="#0B0F14",
+    SURFACE   ="#121821",
+    TEXT_MAIN ="#FFFFFF",
+    TEXT_MUTED="#94A3B8",
+    STROKE    ="rgba(255,255,255,.08)",
 )
 
-# CSS/tema unificado
-inject_theme()
+# Paleta modo claro (también con terracota)
+LIGHT = dict(
+    PRIMARY   ="#0077FF",
+    SUCCESS   ="#16A34A",
+    WARNING   ="#D97706",
+    DANGER    ="#E2725B",   # ← rojo terracota
+    BG        ="#FFFFFF",
+    SURFACE   ="#F8FAFC",   
+    TEXT_MAIN ="#0F172A",   
+    TEXT_MUTED="#475569",   
+    STROKE    ="rgba(2,6,23,.08)",  
+)
+
+
+with st.sidebar:
+    theme_mode = st.selectbox(
+        "🎨 Tema", ["Auto", "Oscuro", "Claro"],
+        key="theme_mode_vista_rutinas",  # 👈 otra clave única
+        help="‘Auto’ sigue el modo del sistema; ‘Oscuro/Claro’ fuerzan los colores."
+    )
 def _rirstr(e: dict) -> str:
     """
     Devuelve el RIR en formato:
@@ -218,6 +81,66 @@ def _rirstr(e: dict) -> str:
     return m.group(0) if m else legacy_s
 
 
+def _vars_block(p):
+    return f"""
+    --primary:{p['PRIMARY']}; --success:{p['SUCCESS']}; --warning:{p['WARNING']}; --danger:{p['DANGER']};
+    --bg:{p['BG']}; --surface:{p['SURFACE']}; --muted:{p['TEXT_MUTED']}; --stroke:{p['STROKE']};
+    --text-main:{p['TEXT_MAIN']};
+    """
+
+# CSS: define ambas paletas + sobrescritura según sistema + override manual
+_css = f"""
+<style>
+/* Defaults (usaremos LIGHT por accesibilidad si no hay media query) */
+:root {{ {_vars_block(LIGHT)} }}
+
+/* Modo oscuro automático por preferencia del sistema */
+@media (prefers-color-scheme: dark) {{
+  :root {{ {_vars_block(DARK)} }}
+}}
+
+/* Estilos base que usan variables */
+html,body,[data-testid="stAppViewContainer"]{{ background:var(--bg)!important; color:var(--text-main)!important; }}
+h1,h2,h3,h4, label, p, span, div{{ color:var(--text-main); }}
+.muted {{ color:var(--muted); font-size:12px; }}
+.hr-light {{ border-bottom:1px solid var(--stroke); margin:12px 0; }}
+.card {{ background:var(--surface); border:1px solid var(--stroke); border-radius:12px; padding:12px 14px; }}
+.h-accent {{ position:relative; padding-left:10px; margin:8px 0 6px; font-weight:700; color:var(--text-main); }}
+.h-accent:before {{ content:""; position:absolute; left:0; top:2px; bottom:2px; width:4px; border-radius:3px; background:var(--primary); }}
+
+/* Badges */
+.badge {{ display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700; }}
+.badge--success {{ background:var(--success); color:#06210c; }}
+.badge--pending {{ background:rgba(0,194,255,.15); color:#055160; border:1px solid rgba(0,194,255,.25); }}
+
+/* Botones */
+div.stButton > button[kind="primary"], .stDownloadButton button {{
+  background: var(--primary) !important; color:#001018 !important; border:none !important;
+  font-weight:700 !important; border-radius:10px !important;
+}}
+div.stButton > button[kind="secondary"] {{
+  background: var(--surface) !important; color: var(--text-main) !important; border:1px solid var(--stroke) !important;
+  border-radius:10px !important;
+}}
+div.stButton > button:hover {{ filter:brightness(0.93); }}
+
+/* Inputs / selects */
+[data-baseweb="input"] input, .stTextInput input, .stSelectbox div, .stSlider, textarea{{
+  color:var(--text-main)!important;
+}}
+/* Sticky CTA */
+.sticky-cta {{ position:sticky; bottom:0; z-index:10; padding-top:8px;
+  background:linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,.06)); backdrop-filter: blur(6px); }}
+</style>
+"""
+
+# Override manual si el usuario lo fuerza
+if theme_mode == "Oscuro":
+    _css += f"<style>:root{{ {_vars_block(DARK)} }}</style>"
+elif theme_mode == "Claro":
+    _css += f"<style>:root{{ {_vars_block(LIGHT)} }}</style>"
+
+st.markdown(_css, unsafe_allow_html=True)
 
 # ==========================
 #  MOTIVACIONAL
@@ -593,7 +516,7 @@ def guardar_reporte_ejercicio(db, correo_cliente_norm, correo_original, semana_s
     if peso_alcanzado_val is None:
         peso_alcanzado_val, _, _ = _parsear_series(ejercicio_editado.get("series_data", []))
     if peso_base_ref is not None and peso_alcanzado_val is not None:
-        delta = float(peso_alcanzado_val) - float(peso_base_ref)
+        delta = float(peso_alcanzado_val) - peso_base_ref
         if abs(delta) >= 1e-4:
             _propagar_peso_a_futuras_semanas(
                 db=db,
@@ -687,7 +610,11 @@ def generar_tarjeta_resumen_sesion(nombre, dia_indice, ejercicios_workout, focus
 # ==========================
 def ver_rutinas():
     # Firebase init
-    db = get_db()
+    if not firebase_admin._apps:
+        cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred)
+    db = firestore.client()
 
     def normalizar_correo(c): return c.strip().lower().replace("@","_").replace(".","_")
     def obtener_fecha_lunes():
@@ -708,13 +635,10 @@ def ver_rutinas():
     datos_usuario = doc_user.to_dict()
     nombre = datos_usuario.get("nombre","Usuario")
     rol = (st.session_state.get("rol") or datos_usuario.get("rol","desconocido")).strip().lower()
-    es_staff = rol in {"entrenador", "admin"}
 
-    # Saludo en cabecera
-    st.markdown(
-        f"<div class='card status-card' style='margin:8px 0; padding:12px;'><b>Bienvenido {nombre.split(' ')[0]}</b></div>",
-        unsafe_allow_html=True,
-    )
+    # Sidebar saludo
+    with st.sidebar:
+        st.markdown(f"<div class='card'><b>Bienvenido {nombre.split(' ')[0]}</b></div>", unsafe_allow_html=True)
 
     # Cargar todas y filtrar por cliente según rol
     rutinas_all = cargar_todas_las_rutinas()
@@ -722,126 +646,22 @@ def ver_rutinas():
 
     cliente_sel = None
     if es_entrenador(rol):
-        rol_lower = rol.strip().lower()
-        limitar_por_responsable = rol_lower == "entrenador"
-
-        @st.cache_data(show_spinner=False)
-        def _usuarios_por_correo():
-            mapping = {}
-            try:
-                for snap in db.collection("usuarios").stream():
-                    if not snap.exists:
-                        continue
-                    data = snap.to_dict() or {}
-                    correo_cli = (data.get("correo") or "").strip().lower()
-                    if correo_cli:
-                        mapping[correo_cli] = data
-            except Exception:
-                pass
-            return mapping
-
-        usuarios_por_correo = _usuarios_por_correo() if limitar_por_responsable else {}
-        correos_entrenador = {correo_raw}
-        if correo_norm:
-            correos_entrenador.add(correo_norm)
-        correos_entrenador.add(normalizar_correo(correo_raw))
-
-        def _cliente_autorizado(rutina_doc: dict) -> bool:
-            if not limitar_por_responsable:
-                return True
-            correo_cliente = (rutina_doc.get("correo") or "").strip().lower()
-            if not correo_cliente:
-                return False
-            datos_cli = usuarios_por_correo.get(correo_cliente)
-            responsable = (datos_cli.get("coach_responsable") or "").strip().lower() if datos_cli else ""
-            if responsable and responsable == correo_raw:
-                return True
-            entrenador_reg = (rutina_doc.get("entrenador") or "").strip().lower()
-            if entrenador_reg and entrenador_reg in correos_entrenador:
-                return True
-            if entrenador_reg and normalizar_correo(entrenador_reg) in correos_entrenador:
-                return True
-            return False
-
-        clientes = sorted({
-            (r.get("cliente") or "").strip()
-            for r in rutinas_all
-            if r.get("cliente") and _cliente_autorizado(r)
-        })
-        if not clientes:
-            st.info("No hay clientes registrados aún."); st.stop()
-
-        busqueda = st.text_input("Busca deportista", key="cliente_input", placeholder="Escribe un nombre…")
-        busqueda_lower = busqueda.lower()
-        clientes_asignados = clientes
-
-        base_lista = clientes_asignados if rol_lower in {"entrenador", "admin", "administrador"} else clientes
-
-        if busqueda_lower:
-            candidatos = [c for c in clientes if busqueda_lower in c.lower()]
-        else:
-            candidatos = base_lista
-
-        if "_mostrar_lista_clientes" not in st.session_state:
-            st.session_state["_mostrar_lista_clientes"] = True
-
-        if st.session_state.get("_cliente_sel") not in clientes:
-            st.session_state.pop("_cliente_sel", None)
-            st.session_state["_mostrar_lista_clientes"] = True
-
-        if busqueda:
-            st.session_state["_mostrar_lista_clientes"] = True
-
-        mostrar_lista = st.session_state.get("_mostrar_lista_clientes", True)
-        cliente_sel = st.session_state.get("_cliente_sel")
-
-        if mostrar_lista or not cliente_sel:
-            if not candidatos:
-                mensaje_sin_resultados = (
-                    "No tienes deportistas asignados. Usa la búsqueda para consultar otros." if rol_lower in {"entrenador", "admin", "administrador"} and not busqueda_lower
-                    else "No se encontraron coincidencias para esa búsqueda."
-                )
-                st.info(mensaje_sin_resultados)
-            else:
-                grid_cols = st.columns(min(3, len(candidatos)))
-                for idx, cliente_nombre in enumerate(candidatos):
-                    col = grid_cols[idx % len(grid_cols)]
-                    with col:
-                        activo = cliente_nombre == cliente_sel
-                        estilo = "border: 1.5px solid var(--primary);" if activo else "border: 1px solid var(--stroke);"
-                        st.markdown(
-                            f"""
-                            <div class='card' style='{estilo} padding:14px; display:flex; flex-direction:column; gap:6px;'>
-                              <div style='font-weight:700; font-size:1.05rem;'>{cliente_nombre}</div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True,
-                        )
-                        if st.button("Ver rutina", key=f"cliente_card_{cliente_nombre}", use_container_width=True, type="secondary"):
-                            st.session_state["_cliente_sel"] = cliente_nombre
-                            st.session_state["_mostrar_lista_clientes"] = False
-                            st.session_state.pop("semana_sel", None)
-                            st.session_state.pop("dia_sel", None)
-                            st.rerun()
-        else:
-            st.markdown(
-                f"""
-                <div class='card' style='border: 1.5px solid var(--primary); padding:14px; display:flex; flex-direction:column; gap:6px;'>
-                  <div style='font-weight:700; font-size:1.05rem;'>{cliente_sel}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            if st.button("Cambiar deportista", key="volver_lista_clientes", type="secondary", use_container_width=True):
-                st.session_state["_mostrar_lista_clientes"] = True
-                st.session_state.pop("dia_sel", None)
+        clientes = sorted({r.get("cliente","") for r in rutinas_all if r.get("cliente")})
+        prev_cliente = st.session_state.get("_cliente_sel")
+        # Botón pequeño alineado a la derecha (actualizar lista)
+        col_void, col_btn = st.columns([6, 1], gap="small")
+        with col_btn:
+            if st.button("🔄", key="refresh_clientes", type="secondary", help="Actualizar rutina"):
+                st.cache_data.clear()
                 st.rerun()
 
-        cliente_sel = st.session_state.get("_cliente_sel")
-        if not cliente_sel:
-            st.info("Selecciona un deportista y haz clic en \"Ver rutina\" para cargar su rutina.")
-            st.stop()
-
+        cliente_input = st.text_input("👤 Escribe el nombre del cliente:", key="cliente_input")
+        candidatos = [c for c in clientes if cliente_input.lower() in c.lower()] or clientes
+        cliente_sel = st.selectbox("Selecciona cliente:", candidatos, key="cliente_sel_ui")
+        if prev_cliente != cliente_sel:
+            st.session_state["_cliente_sel"] = cliente_sel
+            st.session_state.pop("semana_sel", None)
+            st.session_state.pop("dia_sel", None)
         rutinas_cliente = [r for r in rutinas_all if r.get("cliente")==cliente_sel]
     else:
         rutinas_cliente = [r for r in rutinas_all if (r.get("correo","") or "").strip().lower()==correo_raw]
@@ -869,30 +689,33 @@ def ver_rutinas():
 
     index_semana = semanas.index(pre_semana) if pre_semana in semanas else 0
     # ── Barra superior: mensaje + semana + refrescar ─────────────────────────────
-    motivacional_msg = mensaje_motivador_del_dia(nombre, correo_norm) if not es_staff else None
-    status_card = st.container()
-    with status_card:
-        st.markdown("<div class='planner-card'>", unsafe_allow_html=True)
-        planner_cols = st.columns([3, 2], gap="large")
-        left_summary = planner_cols[0].empty()
-        with planner_cols[1]:
-            st.markdown("<span class='planner-card__label'>Semana</span>", unsafe_allow_html=True)
-            semana_sel = st.selectbox(
-                "Semana",
-                semanas,
-                index=index_semana,
-                key="semana_sel",
-                label_visibility="collapsed",
-            )
-            planner_actions = st.container()
-        st.markdown("</div>", unsafe_allow_html=True)
+    top_cols = st.columns([6, 2, 1], gap="small")
+    msg = mensaje_motivador_del_dia(nombre, correo_norm)
+    with top_cols[0]:
+        # Aquí va tu bloque de texto motivacional, saludo y elige día
+        st.markdown(
+            f"""
+            <div style='text-align: left; line-height:1.5;'>
+                <div style='font-size:16px; font-weight:600;'>{msg}</div>
+                <div style='font-size:18px;'>👋 Hola, <b>{nombre}</b></div>
+                <div style='font-size:14px; color: var(--text-muted);'>Aquí tienes tu semana de entrenamiento. Elige un día para comenzar.</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-    try:
-        week_start = datetime.strptime(semana_sel, "%Y-%m-%d").date()
-        week_end = week_start + timedelta(days=6)
-        rango_texto = f"{week_start.strftime('%d %b')} – {week_end.strftime('%d %b %Y')}"
-    except Exception:
-        rango_texto = "Semana sin rango definido"
+    with top_cols[1]:
+        semana_sel = st.selectbox(
+            "", semanas,
+            index=index_semana,
+            key="semana_sel",
+            label_visibility="collapsed",
+        )
+
+    with top_cols[2]:
+        if st.button("🔄", key=f"refresh_{semana_sel}", type="secondary", help="Actualizar", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
 
     # Si venimos por query param la primera vez, SEMBRAMOS el día y marcamos bandera
     if qp_semana and qp_dia and "dia_sel" not in st.session_state:
@@ -919,89 +742,74 @@ def ver_rutinas():
     # Banner motivacional (solo deportista) con racha de SEMANAS
     if rol == "deportista":
         racha_actual = _calcular_racha_dias(rutinas_cliente, semana_sel)
+        msg = mensaje_motivador_del_dia(nombre, correo_norm)
         extra = (
             f"Llevas {racha_actual} semana{'s' if racha_actual!=1 else ''} seguidas COMPLETAS. ¡No rompas la cadena! 🔥"
             if racha_actual > 0 else None
         )
+        st.markdown(f"<div class='banner-mot'>{msg}</div>", unsafe_allow_html=True)
         if extra: st.caption(f"🔥 {extra}")
 
-    rutina_semana = rutina_doc.get("rutina", {}) or {}
-    dias_dash = _dias_numericos(rutina_semana)
-    sesiones_completadas = sum(1 for d in dias_dash if rutina_semana.get(f"{d}_finalizado") is True)
-    total_sesiones = len(dias_dash)
-
+    # Bloque rutina
     bloque_id = rutina_doc.get("bloque_rutina")
-    bloque_meta = "Sin identificador"
     if bloque_id:
         mismas = [r for r in rutinas_cliente if r.get("bloque_rutina")==bloque_id]
         fechas_bloque = sorted([r["fecha_lunes"] for r in mismas if r.get("fecha_lunes")])
         try:
             semana_actual_idx = fechas_bloque.index(semana_sel)+1
             total_semanas_bloque = len(fechas_bloque)
-            bloque_meta = f"Semana {semana_actual_idx} de {total_semanas_bloque}"
+            st.markdown(f"<div class='card'>📦 <b>Bloque de rutina:</b> Semana {semana_actual_idx} de {total_semanas_bloque}</div>", unsafe_allow_html=True)
         except ValueError:
-            bloque_meta = "Sin identificador"
+            st.info("ℹ️ Semana no encontrada en bloque de rutina.")
+    else:
+        st.markdown(f"<div class='card'>📦 <b>Bloque de rutina:</b> <span class='muted'>Sin identificador</span></div>", unsafe_allow_html=True)
 
-    sesiones_texto = (
-        f"{sesiones_completadas}/{total_sesiones} sesiones completadas"
-        if total_sesiones else "Sin sesiones registradas"
-    )
+    # Dashboard de días (tarjetas)
+    dias_dash = _dias_numericos(rutina_doc.get("rutina", {}))
 
+    # Si ya hay día elegido (session_state o por query param), NO mostrar las tarjetas
     dia_actual = st.session_state.get("dia_sel") or (str(qp_dia) if qp_dia else None)
 
-    left_blocks = ["<div class='planner-card__body'>"]
-    if motivacional_msg:
-        left_blocks.append(f"<div class='planner-card__motivation'>{motivacional_msg}</div>")
-    left_blocks.append(f"<div class='planner-card__meta'>Bloque de rutina · {bloque_meta}</div>")
-    left_blocks.append(f"<div class='planner-card__meta muted'>{sesiones_texto}</div>")
     if dia_actual:
-        left_blocks.append(f"<div class='planner-card__badge is-active'>Día {dia_actual}</div>")
-    else:
-        left_blocks.append("<div class='planner-card__note'>Selecciona un día para revisar la sesión detallada.</div>")
-    left_blocks.append("</div>")
-    left_summary.markdown("".join(left_blocks), unsafe_allow_html=True)
-
-    with planner_actions:
-        if dia_actual:
-            st.markdown("<div style='display:flex; justify-content:flex-end;'>", unsafe_allow_html=True)
-            if st.button("Cambiar día", key=f"cambiar_{semana_sel}_{dia_actual}", type="secondary"):
+        # Chip de día seleccionado + botón para cambiar día (sin volver a Inicio)
+        chip_cols = st.columns([2, 1], gap="small")
+        with chip_cols[0]:
+            st.markdown(
+                f"<div class='badge badge--pending' style='font-size:14px;'>Día seleccionado: <b>{dia_actual}</b></div>",
+                unsafe_allow_html=True
+            )
+        with chip_cols[1]:
+            if st.button("Cambiar día", key=f"cambiar_{semana_sel}_{dia_actual}", type="secondary", use_container_width=True):
+                # Quitar día, mantener semana en la URL
                 st.session_state.pop("dia_sel", None)
                 st.query_params.clear()
                 st.query_params.update({"semana": semana_sel})
                 st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
-        else:
-            st.markdown("<div class='planner-card__note'>Selecciona un día en las tarjetas inferiores para ver la rutina.</div>", unsafe_allow_html=True)
-
-    # Aún no hay día seleccionado → mostrar progreso + tarjetas
-    if not dia_actual:
+    else:
+        # Aún no hay día seleccionado → mostrar progreso + tarjetas
         if dias_dash:
-            progreso_valor = sesiones_completadas/len(dias_dash)
-            progreso_texto = None if es_staff else f"{sesiones_completadas}/{len(dias_dash)} sesiones completadas"
+            completados = sum(1 for d in dias_dash if rutina_doc["rutina"].get(f"{d}_finalizado") is True)
+            st.progress(completados/len(dias_dash), text=f"{completados}/{len(dias_dash)} sesiones completadas")
 
-            if progreso_texto is not None:
-                st.progress(progreso_valor, text=progreso_texto)
-            else:
-                st.progress(progreso_valor)
-
-            st.markdown(
-                "<p class='days-subtitle'>Elige un día para revisar la rutina detallada.</p>",
-                unsafe_allow_html=True,
-            )
-
-            cols = st.columns(len(dias_dash), gap="medium")
+            cols = st.columns(len(dias_dash), gap="small")
             for i, dia in enumerate(dias_dash):
                 finalizado = bool(rutina_doc["rutina"].get(f"{dia}_finalizado") is True)
-                estado_texto = "Completado" if finalizado else "Pendiente"
-                btn_label = f"{'✅' if finalizado else '⚡'} Día {dia}\n{estado_texto}"
+                btn_label = f"{'✅' if finalizado else '⚡'} Día {dia}"
                 btn_key   = f"daybtn_{semana_sel}_{cliente_sel}_{dia}"
                 with cols[i]:
                     if st.button(btn_label, key=btn_key, type=("secondary" if finalizado else "primary"),
-                                use_container_width=True, help=f"Ver rutina del día {dia}"):
+                                use_container_width=True, help=("Completado" if finalizado else "Pendiente")):
                         st.session_state["dia_sel"] = str(dia)
                         # sincroniza la URL para persistencia (sobrevive reload/bloqueo)
                         st.query_params.update({"semana": semana_sel, "dia": str(dia)})
                         st.rerun()
+
+                    st.markdown(
+                        "<span class='badge {cls}'></span>".format(
+                            cls=("badge--success" if finalizado else "badge--pending"),
+                        ),
+                        unsafe_allow_html=True
+                    )
 
 
     st.markdown("<div class='hr-light'></div>", unsafe_allow_html=True)
@@ -1016,6 +824,27 @@ def ver_rutinas():
     if not dia_sel:
         st.info("Selecciona un día en las tarjetas superiores para ver tu rutina.")
         st.stop()
+    # === Barra superior: Volver al inicio (manteniendo semana) ===
+    vc_cols = st.columns([1, 6])
+    with vc_cols[0]:
+        if st.button("⬅️ Volver", key=f"volver_{semana_sel}_{dia_sel}", type="secondary"):
+            # 1) Quitar el día seleccionado (pero conservar la semana actual)
+            st.session_state.pop("dia_sel", None)
+
+            # 2) Sincronizar URL: dejamos ?semana=... y quitamos ?dia=...
+            st.query_params.clear()
+            st.query_params.update({"semana": semana_sel})
+
+            # 3) Navegar a Inicio (multipage o router)
+            try:
+                import streamlit as stmod
+                stmod.switch_page("inicio_deportista.py")
+            except Exception:
+                # Si usas router propio:
+                st.session_state["feature"] = "inicio_deportista"
+                st.rerun()
+
+
     # Checkbox global de Sesión anterior
     mostrar_prev = st.checkbox(
         "📅 Mostrar sesión anterior",

@@ -4,10 +4,52 @@ from datetime import timedelta
 from herramientas import aplicar_progresion, normalizar_texto
 import streamlit as st
 import uuid
+from app_core.firebase_client import get_db
 
 # -------------------------
 # Helpers de conversión
 # -------------------------
+
+def _norm(s: str) -> str:
+    import unicodedata, re
+    s = str(s or "")
+    s = unicodedata.normalize("NFKD", s).encode("ASCII", "ignore").decode("utf-8")
+    s = re.sub(r"\s+", " ", s).strip().casefold()
+    return s
+
+def _resolver_id_implemento(db, marca: str, maquina: str) -> str:
+    """Devuelve el id_implemento si hay match único por marca+maquina; si no, ''."""
+    marca_in = (marca or "").strip()
+    maquina_in = (maquina or "").strip()
+    if not marca_in or not maquina_in:
+        return ""
+
+    # 1) Intento exacto (requiere índice compuesto si usas ambos where ==)
+    try:
+        q = (db.collection("implementos")
+               .where("marca", "==", marca_in)
+               .where("maquina", "==", maquina_in))
+        hits = list(q.stream())
+        if len(hits) == 1:
+            return hits[0].id
+        elif len(hits) >= 2:
+            return ""  # múltiples → ambiguo → vacío
+    except Exception:
+        pass
+
+    # 2) Normalizado en memoria (tolerante a acentos/caso/espacios)
+    mkey, maqkey = _norm(marca_in), _norm(maquina_in)
+    try:
+        candidatos = []
+        for d in db.collection("implementos").limit(1000).stream():
+            data = d.to_dict() or {}
+            if _norm(data.get("marca")) == mkey and _norm(data.get("maquina")) == maqkey:
+                candidatos.append(d.id)
+        return candidatos[0] if len(candidatos) == 1 else ""
+    except Exception:
+        return ""
+
+
 def _f(v):
     """Convierte a float o None. Tolerante con '8-10' => 8, '' => None."""
     try:
@@ -81,7 +123,7 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
     Escalares: peso, tiempo, velocidad, descanso, series.
     Rangos: repeticiones (min/max) y RIR (min/max).
     """
-    db = firestore.client()
+    db = get_db()
     bloque_id = str(uuid.uuid4())
 
     try:
@@ -234,6 +276,7 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                         })
 
                 if lista_ejercicios:
+                    # Firestore solo acepta claves string en mapas, por eso guardamos el número de día como texto
                     rutina_semana["rutina"][str(numero_dia)] = lista_ejercicios
 
             if rutina_semana["rutina"]:

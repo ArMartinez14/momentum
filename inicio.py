@@ -1,0 +1,435 @@
+# inicio_deportista.py — Inicio para deportista o entrenador (vista dual)
+
+from __future__ import annotations
+import streamlit as st
+from datetime import datetime, timedelta
+from collections import defaultdict
+from functools import partial
+
+from motivacional import mensaje_motivador_del_dia
+from app_core.firebase_client import get_db
+from app_core.theme import inject_theme
+
+# ======== Estilos (tema unificado) ========
+inject_theme()
+st.markdown(
+    """
+    <style>
+    .progress-bar {
+        margin-top: 10px;
+        width: 100%;
+        height: 10px;
+        background: rgba(148, 163, 184, 0.25);
+        border-radius: 999px;
+        overflow: hidden;
+    }
+    .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #22C55E 0%, #0EA5E9 100%);
+    }
+    div[data-testid="stButton"][data-key^="accion_"] button {
+        background: #0b1018 !important;
+        border: 1px solid rgba(56, 189, 248, 0.55) !important;
+        color: #e0f2fe !important;
+        font-weight: 700 !important;
+        border-radius: 12px !important;
+        box-shadow: 0 10px 25px rgba(14, 165, 233, 0.18);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    div[data-testid="stButton"][data-key^="accion_"] button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 14px 30px rgba(56, 189, 248, 0.25);
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ========= Helpers =========
+def _norm_mail(c: str) -> str:
+    return (c or "").strip().lower().replace("@","_").replace(".","_")
+
+
+from datetime import datetime, timedelta, date
+
+def _lunes_hoy() -> date:
+    h = date.today()
+    return h - timedelta(days=h.weekday())
+
+def _parse_lunes(fecha_lunes_str: str) -> date:
+    # 'fecha_lunes' viene como 'YYYY-MM-DD'
+    return datetime.strptime(fecha_lunes_str, "%Y-%m-%d").date()
+
+def semana_actual_en_bloque(fechas_lunes: list[str]) -> tuple[int, int, str]:
+    """
+    Dado el listado de 'fecha_lunes' de un bloque (todas las semanas planificadas),
+    devuelve (semana_actual, total_semanas, ultima_semana_str).
+
+    - semana_actual se calcula con el lunes de hoy relativo al primer lunes del bloque.
+    - Se acota al rango [1, total].
+    """
+    if not fechas_lunes:
+        return (0, 0, "")
+
+    fechas = sorted(_parse_lunes(f) for f in fechas_lunes)
+    total = len(fechas)
+    inicio = fechas[0]
+    hoy_lunes = _lunes_hoy()
+
+    # semanas transcurridas desde el inicio (1-indexed)
+    idx = ((hoy_lunes - inicio).days // 7) + 1
+    idx = max(1, min(idx, total))  # acotar a [1, total]
+
+    ultima = fechas[-1].strftime("%Y-%m-%d")
+    return (idx, total, ultima)
+
+def _fecha_lunes_hoy() -> str:
+    hoy = datetime.now()
+    lunes = hoy - timedelta(days=hoy.weekday())
+    return lunes.strftime("%Y-%m-%d")
+
+@st.cache_data(show_spinner=False)
+def _rutinas_cliente_semana(_db, correo_raw: str):
+    docs = _db.collection("rutinas_semanales").where("correo", "==", correo_raw).stream()
+    out = []
+    for d in docs:
+        try: out.append(d.to_dict())
+        except: pass
+    return out
+
+@st.cache_data(show_spinner=False)
+def _rutinas_asignadas_a_entrenador(_db, correo_entrenador: str):
+    """Todas las rutinas donde el campo 'entrenador' coincide con el correo del entrenador."""
+    docs = _db.collection("rutinas_semanales").where("entrenador", "==", correo_entrenador).stream()
+    out = []
+    for d in docs:
+        try: out.append(d.to_dict())
+        except: pass
+    return out
+
+def _dias_numericos(rutina_dict: dict) -> list[str]:
+    if not isinstance(rutina_dict, dict): return []
+    dias = [k for k in rutina_dict.keys() if str(k).isdigit()]
+    return sorted(dias, key=lambda x: int(x))
+
+def _primero_pendiente(doc: dict) -> str | None:
+    r = (doc.get("rutina") or {})
+    for d in _dias_numericos(r):
+        if not (r.get(f"{d}_finalizado") is True):
+            return d
+    return None
+
+def _set_query_params(**params: str | None):
+    """Compatibilidad con Streamlit para limpiar/actualizar los query params."""
+    params = {k: v for k, v in params.items() if v is not None}
+    qp = None
+    try:
+        qp = st.query_params
+    except Exception:
+        qp = None
+
+    if qp is not None:
+        try:
+            qp.clear()
+            if params:
+                qp.update(params)
+            return
+        except Exception:
+            pass
+
+    try:
+        st.experimental_set_query_params(**params)
+    except Exception:
+        pass
+
+def _go_menu(menu_label: str, *, clear_dia: bool = False, clear_params: bool = False):
+    """Utilidad centralizada para movernos entre secciones usando el menú lateral."""
+    if clear_dia:
+        st.session_state.pop("dia_sel", None)
+    if clear_params:
+        _set_query_params()
+    st.session_state["_menu_target"] = menu_label
+    st.rerun()
+
+def _go_ver_rutinas(semana: str | None = None, dia: str | None = None):
+    """Navega a Ver Rutinas desde el Inicio; si recibo semana/día, los siembro."""
+    if semana:
+        st.session_state["semana_sel"] = semana
+    if dia:
+        st.session_state["dia_sel"] = str(dia)
+    _set_query_params(
+        semana=semana,
+        dia=str(dia) if dia is not None else None,
+    )
+    _go_menu("Ver Rutinas")
+
+def _go_ver_rutinas_sin_prefijar():
+    """Entrenador: ir a Ver Rutinas sin sembrar nada."""
+    _go_menu("Ver Rutinas", clear_dia=True, clear_params=True)
+
+def _bloque_progress_para_cliente(r_docs: list[dict]) -> tuple[int | None, int | None, str | None]:
+    """
+    Dado el conjunto de docs de rutinas de un cliente, devuelve:
+    (semana_actual_en_bloque, total_en_bloque, fecha_lunes_ultima_semana_del_bloque)
+
+    - La semana actual se calcula respecto al lunes de HOY y el primer lunes del bloque.
+    - Se acota al rango [1, total].
+    """
+    if not r_docs:
+        return None, None, None
+
+    # Docs con fecha válida
+    validos = [r for r in r_docs if r.get("fecha_lunes")]
+    if not validos:
+        return None, None, None
+
+    # Tomamos el bloque "activo" según el doc más reciente (por fecha_lunes)
+    ult_doc = max(validos, key=lambda x: x["fecha_lunes"])
+    bloque_id = ult_doc.get("bloque_rutina")
+
+    # Todas las semanas (fechas_lunes) de ese mismo bloque
+    if bloque_id:
+        fechas_bloque = [
+            r["fecha_lunes"] for r in r_docs
+            if r.get("bloque_rutina") == bloque_id and r.get("fecha_lunes")
+        ]
+    else:
+        # No hay bloque_rutina: usamos igual todas las fechas que tenga el cliente
+        fechas_bloque = [r["fecha_lunes"] for r in validos]
+
+    fechas_bloque = sorted(set(fechas_bloque))
+    if not fechas_bloque:
+        return None, None, None
+
+    sem_act, total, ultima = semana_actual_en_bloque(fechas_bloque)
+    return sem_act, total, ultima
+
+SEGUIMIENTO_LABEL = "Seguimiento (Entre Evaluaciones)"
+
+_ACCIONES_INICIO = [
+    {
+        "id": "ver_rutinas",
+        "label": "Ver Rutinas",
+        "help": "Revisa y actualiza las semanas de entrenamiento de tus deportistas.",
+        "roles": {"entrenador", "admin", "administrador"},
+        "callback": _go_ver_rutinas_sin_prefijar,
+    },
+    {
+        "id": "crear_rutinas",
+        "label": "Crear Rutinas",
+        "help": "Genera o asigna nuevas planificaciones semanales.",
+        "roles": {"entrenador", "admin", "administrador"},
+        "callback": partial(_go_menu, "Crear Rutinas", clear_params=True),
+    },
+    {
+        "id": "ingresar_deportista",
+        "label": "Ingresar Deportista o Ejercicio",
+        "help": "Registra nuevos deportistas, videos o ejercicios en la base.",
+        "roles": {"entrenador", "admin", "administrador"},
+        "callback": partial(_go_menu, "Ingresar Deportista o Ejercicio", clear_params=True),
+    },
+    {
+        "id": "borrar_rutinas",
+        "label": "Borrar Rutinas",
+
+        "help": "Elimina planificaciones que ya no necesitas.",
+        "roles": {"entrenador", "admin", "administrador"},
+        "callback": partial(_go_menu, "Borrar Rutinas", clear_params=True),
+    },
+    {
+        "id": "editar_rutinas",
+        "label": "Editar Rutinas",
+        "help": "Ajusta rutinas existentes día por día.",
+        "roles": {"entrenador", "admin", "administrador"},
+        "callback": partial(_go_menu, "Editar Rutinas", clear_params=True),
+    },
+    {
+        "id": "ejercicios",
+        "label": "Ejercicios",
+        "help": "Consulta el catálogo de ejercicios disponibles.",
+        "roles": {"entrenador", "admin", "administrador"},
+        "callback": partial(_go_menu, "Ejercicios", clear_params=True),
+    },
+    {
+        "id": "crear_descarga",
+        "label": "Crear Descarga",
+        "help": "Genera un archivo descargable con la rutina seleccionada.",
+        "roles": {"entrenador", "admin", "administrador"},
+        "callback": partial(_go_menu, "Crear Descarga", clear_params=True),
+    },
+    {
+        "id": "reportes",
+        "label": "Reportes",
+        "help": "Visualiza indicadores clave del desempeño.",
+        "roles": {"entrenador", "admin", "administrador"},
+        "callback": partial(_go_menu, "Reportes", clear_params=True),
+    },
+    {
+        "id": "seguimiento",
+        "label": SEGUIMIENTO_LABEL,
+        "help": "Registra avances entre evaluaciones formales.",
+        "roles": {"admin", "administrador"},
+        "callback": partial(_go_menu, SEGUIMIENTO_LABEL, clear_params=True),
+    },
+    {
+        "id": "resumen_admin",
+        "label": "Resumen (Admin)",
+        "help": "Panel ejecutivo con el estado de cada entrenador.",
+        "roles": {"admin", "administrador"},
+        "callback": partial(_go_menu, "Resumen (Admin)", clear_params=True),
+    },
+]
+
+def _acciones_para_rol(rol: str) -> list[dict]:
+    rol = (rol or "").strip().lower()
+    return [a for a in _ACCIONES_INICIO if rol in a["roles"]]
+
+# ========= Vista =========
+def inicio_deportista():
+    db = get_db()
+
+    correo_raw = (st.session_state.get("correo","") or "").strip().lower()
+    if not correo_raw:
+        st.error("❌ No hay correo activo."); st.stop()
+
+    correo_norm = _norm_mail(correo_raw)
+    user_doc = db.collection("usuarios").document(correo_norm).get()
+    datos_usuario = user_doc.to_dict() if user_doc.exists else {}
+    nombre = (datos_usuario.get("nombre") or st.session_state.get("primer_nombre") or correo_raw.split("@")[0] or "Usuario").split(" ")[0]
+    rol = (st.session_state.get("rol") or datos_usuario.get("rol","deportista")).strip().lower()
+
+    # ====== VISTA ENTRENADOR / ADMIN ======
+    if rol in ("entrenador", "admin", "administrador"):
+        # 1) Mensaje de bienvenida
+        st.markdown(
+            f"""
+            <div class='banner'>
+              👋 Hola, <b>{nombre}</b><br>
+              <span style='color:var(--muted)'>Panel de entrenador — aquí verás tus deportistas y el estado de sus bloques.</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        # 2) Acciones según rol (primero el menú)
+        acciones = _acciones_para_rol(rol)
+        if acciones:
+            st.markdown("### 🛠️ Tus herramientas")
+            cols = st.columns(3, gap="large")
+            for idx, accion in enumerate(acciones):
+                col = cols[idx % len(cols)]
+                with col:
+                    etiqueta = f"{accion['label']}"
+                    if st.button(etiqueta, key=f"accion_{accion['id']}", help=accion.get("help"), use_container_width=True, type="secondary"):
+                        accion["callback"]()
+
+        st.markdown("---")
+
+        # 3) Deportistas a mi cargo (entrenador == mi correo)
+        asignadas = _rutinas_asignadas_a_entrenador(db, correo_raw)
+        if not asignadas:
+            st.info("No tienes deportistas asignados aún.")
+        else:
+            # agrupar por correo de cliente
+            por_cliente = defaultdict(list)
+            for r in asignadas:
+                key = (r.get("correo") or "").strip().lower()
+                por_cliente[key].append(r)
+
+            st.markdown("### 🧑‍🤝‍🧑 Tus deportistas")
+            def _fecha_val(doc):
+                try:
+                    return datetime.strptime(doc["fecha_lunes"], "%Y-%m-%d")
+                except Exception:
+                    return datetime.min
+
+            ordenados = []
+            for correo_cli, docs_cli in por_cliente.items():
+                nombre_cli = (docs_cli[-1].get("cliente") or correo_cli.split("@")[0] or "Cliente").strip()
+                sem_idx, sem_total, fecha_ult = _bloque_progress_para_cliente(docs_cli)
+                try:
+                    fecha_dt = datetime.strptime(fecha_ult, "%Y-%m-%d") if fecha_ult else datetime.min
+                except Exception:
+                    fecha_dt = datetime.min
+                ordenados.append((correo_cli, docs_cli, nombre_cli, sem_idx, sem_total, fecha_ult, fecha_dt))
+
+            ordenados.sort(key=lambda item: item[6])
+
+            cols = st.columns(2, gap="medium")
+            for idx, (correo_cli, docs_cli, nombre_cli, sem_idx, sem_total, fecha_ult, _) in enumerate(ordenados):
+                with cols[idx % 2]:
+                    st.markdown(
+                        f"""
+                        <div class="card">
+                          <div style="font-weight:800; font-size:1.05rem;">{nombre_cli}</div>
+                          <div class='muted' style='margin-top:6px;'>Bloque: Semana {sem_idx or '—'} de {sem_total or '—'}</div>
+                          <div class='muted'>Última semana de rutina: <code>{fecha_ult or '—'}</code></div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+        return  # ⬅️ no renderizamos la vista de deportista
+
+    # ====== VISTA DEPORTISTA ======
+    # Rutinas del cliente
+    rutinas = _rutinas_cliente_semana(db, correo_raw)
+    if not rutinas:
+        st.warning("⚠️ Aún no hay rutinas asignadas."); st.stop()
+
+    semanas = sorted({r.get("fecha_lunes") for r in rutinas if r.get("fecha_lunes")}, reverse=True)
+    semana_actual = _fecha_lunes_hoy()
+    qs_semana = st.query_params.get("semana", [None])
+    qs_semana = qs_semana[0] if isinstance(qs_semana, list) else qs_semana
+    pre_semana = st.session_state.get("semana_sel") or qs_semana or (semana_actual if semana_actual in semanas else (semanas[0] if semanas else None))
+    if not pre_semana: st.warning("⚠️ No hay semanas válidas."); st.stop()
+
+    # ── Top bar: mensaje + semana + refrescar ─────────────────────
+    top_cols = st.columns([6, 2], gap="small")
+    with top_cols[0]:
+        msg = mensaje_motivador_del_dia(nombre, correo_norm)
+        st.markdown(
+            f"""
+            <div class='banner'>
+              {msg}<br>
+              👋 Hola, <b>{nombre}</b><br>
+              <span style='color:var(--muted)'>Aquí tienes tu semana de entrenamiento. Elige un día para comenzar.</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    with top_cols[1]:
+        semana_sel = st.selectbox(
+            "Semana",
+            semanas,
+            index=semanas.index(pre_semana),
+            key="inicio_semana_sel",
+            label_visibility="collapsed",
+        )
+    # Documento de la semana
+    doc_semana = next((r for r in rutinas if r.get("fecha_lunes")==semana_sel), None)
+    if not doc_semana or not isinstance(doc_semana.get("rutina"), dict):
+        st.warning("⚠️ No hay detalles de rutina en esta semana."); st.stop()
+
+    # Tarjetas por día
+    dias = _dias_numericos(doc_semana["rutina"])
+    if not dias: st.info("No hay días configurados en esta semana."); st.stop()
+
+    st.markdown("### 🗓️ Tus días")
+    cols = st.columns(min(len(dias), 5), gap="small")
+    for i, d in enumerate(dias):
+        fin = bool(doc_semana["rutina"].get(f"{d}_finalizado") is True)
+        label = f"{'✅' if fin else '⚡'} Día {d}"
+        with cols[i % len(cols)]:
+            if st.button(label, key=f"inicio_day_{semana_sel}_{d}",
+                         type=("secondary" if fin else "primary"), use_container_width=True):
+                _go_ver_rutinas(semana_sel, d)
+
+    # Continuar donde quedó
+    st.markdown("<hr style='border-color:var(--stroke);'>", unsafe_allow_html=True)
+    sugerido = _primero_pendiente(doc_semana) or (dias[0] if dias else None)
+    if sugerido and st.button(f"▶️ Continuar: Día {sugerido}", use_container_width=True):
+        _go_ver_rutinas(semana_sel, sugerido)
+
+if __name__ == "__main__":
+    inicio_deportista()

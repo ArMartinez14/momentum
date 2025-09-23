@@ -3,21 +3,15 @@
 # según estado {dia}_finalizado. Al hacer clic, abre ver_rutinas() directo en ese día.
 
 import streamlit as st
-import firebase_admin
-from firebase_admin import credentials, firestore, initialize_app
+from firebase_admin import firestore
 from datetime import datetime, timedelta, date
-import json
+from app_core.firebase_client import get_db
+from app_core.theme import inject_theme
 
 # Importa la vista de rutina para navegar dentro del mismo flujo
 from vista_rutinas import ver_rutinas
 
 # ---------- Utils comunes ----------
-def _init_firebase():
-    if not firebase_admin._apps:
-        cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
-        cred = credentials.Certificate(cred_dict)
-        initialize_app(cred)
-    return firestore.client()
 
 def _normalizar_correo(correo: str) -> str:
     return (correo or "").strip().lower().replace("@", "_").replace(".", "_")
@@ -54,6 +48,7 @@ def _boton_dia(label: str, finalizado: bool, key: str) -> bool:
 # ---------- Vista principal ----------
 def dashboard():
     st.set_page_config(page_title="Dashboard", layout="wide")
+    inject_theme()
 
     # Estado de login de tu app principal (ya lo haces en app.py).
     # Aquí asumimos que ya pasó por soft_login_barrier en la app principal.
@@ -64,7 +59,7 @@ def dashboard():
         st.error("❌ No hay sesión activa. Inicia sesión en la app principal.")
         st.stop()
 
-    db = _init_firebase()
+    db = get_db()
 
     st.title("📊 Dashboard")
 

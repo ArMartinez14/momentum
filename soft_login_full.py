@@ -424,3 +424,17 @@ def soft_login_test_ui():
         tok_cookie = None
 
     st.caption(f"Cookie presente: {bool(tok_cookie)}  |  Token URL: {bool(_read_token_from_url())}")
+
+# soft_login_full.py (solo SI te faltan estas funciones)
+import streamlit as st
+
+def get_logged_email() -> str | None:
+    # Estándar de este proyecto: guardamos el correo en session_state
+    # y/o (según tu implementación) lo lees de cookie/token.
+    return st.session_state.get("soft_login_email")
+
+def soft_login_test_ui():
+    st.subheader("Diagnóstico Soft Login")
+    st.write("session_state email:", st.session_state.get("soft_login_email"))
+    st.write("query params:", dict(st.query_params))
+    st.write("recuerda 7 días:", True)

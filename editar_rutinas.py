@@ -5,61 +5,12 @@ from datetime import datetime
 import streamlit as st
 import pandas as pd
 
-import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import firestore
+from app_core.firebase_client import get_db
+from app_core.theme import inject_theme
 
 # ===================== 🎨 PALETA / ESTILOS =====================
-PRIMARY   = "#00C2FF"
-SUCCESS   = "#22C55E"
-WARNING   = "#F59E0B"
-DANGER    = "#EF4444"
-BG_DARK   = "#0B0F14"
-SURFACE   = "#121821"
-TEXT_MAIN = "#FFFFFF"
-TEXT_MUTED= "#94A3B8"
-STROKE    = "rgba(255,255,255,.08)"
-
-st.markdown(f"""
-<style>
-:root {{
-  --primary:{PRIMARY}; --success:{SUCCESS}; --warning:{WARNING}; --danger:{DANGER};
-  --bg:{BG_DARK}; --surface:{SURFACE}; --muted:{TEXT_MUTED}; --stroke:{STROKE};
-}}
-html,body,[data-testid="stAppViewContainer"]{{ background:var(--bg)!important; }}
-h1,h2,h3,h4,h5 {{ color:{TEXT_MAIN}; }}
-p, label, span, div {{ color:{TEXT_MAIN}; }}
-small, .muted {{ color:var(--muted)!important; }}
-.hr-light {{ border-bottom:1px solid var(--stroke); margin:12px 0; }}
-.h-accent {{ position:relative; padding-left:10px; margin:8px 0 6px; font-weight:700; color:{TEXT_MAIN}; }}
-.h-accent:before {{ content:""; position:absolute; left:0; top:2px; bottom:2px; width:4px; border-radius:3px; background:var(--primary); }}
-.card {{
-  background:var(--surface); border:1px solid var(--stroke);
-  border-radius:12px; padding:12px 14px; margin:8px 0;
-}}
-.badge {{ display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700; }}
-.badge--warn {{ background:rgba(245,158,11,.15); border:1px solid rgba(245,158,11,.25); color:#FFCF7A; }}
-/* Botones */
-div.stButton > button[kind="primary"], .stDownloadButton button {{
-  background: var(--primary) !important; color:#001018 !important; border:none !important;
-  font-weight:700 !important; border-radius:10px !important;
-}}
-div.stButton > button[kind="secondary"] {{
-  background:#1A2431 !important; color:#E0E0E0 !important; border:1px solid var(--stroke) !important;
-  border-radius:10px !important;
-}}
-div.stButton > button:hover {{ filter:brightness(0.93); }}
-/* Inputs */
-.stTextInput > div > div > input,
-.stNumberInput input, .stTextArea textarea, .stSelectbox > div > div {{
-  background:#101722 !important; color:{TEXT_MAIN} !important; border:1px solid var(--stroke) !important;
-}}
-/* Tabs */
-.stTabs [data-baseweb="tab-list"] button span {{ color:{TEXT_MAIN}; }}
-.stTabs [data-baseweb="tab-highlight"] {{ background:var(--primary)!important; }}
-/* Encabezados de tabla */
-.header-center {{ text-align:center; white-space:nowrap; font-weight:700; }}
-</style>
-""", unsafe_allow_html=True)
+inject_theme()
 
 # ===================== ⚙️ CONFIGURACIÓN RÁPIDA =====================
 DEFAULT_WU_ROWS_NEW_DAY = 0
@@ -82,14 +33,7 @@ def _f(v):
     except:
         return None
 
-# ===================== 🔥 FIREBASE (init perezoso + cacheado) =====================
-@st.cache_resource(show_spinner=False)
-def get_db():
-    if not firebase_admin._apps:
-        cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
-        cred = credentials.Certificate(cred_dict)
-        firebase_admin.initialize_app(cred)
-    return firestore.client()
+# ===================== 🔥 FIREBASE (uso centralizado) =====================
 
 # ===================== 📦 CARGAS CACHEADAS =====================
 @st.cache_data(show_spinner=False)
@@ -300,53 +244,45 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                 key=f"circ_{key_entrenamiento}", label_visibility="collapsed"
             )
 
-            # Buscar + Ejercicio
-            if seccion == "Work Out":
-                palabra = cols[1].text_input(
-                    "", value=fila.get("BuscarEjercicio", ""),
-                    key=f"buscar_{key_entrenamiento}", label_visibility="collapsed", placeholder="Buscar…"
-                )
-                fila["BuscarEjercicio"] = palabra
+            # Buscar + Ejercicio (para Warm Up y Work Out)
+            palabra = cols[1].text_input(
+                "", value=fila.get("BuscarEjercicio", ""),
+                key=f"buscar_{key_entrenamiento}", label_visibility="collapsed", placeholder="Buscar ejercicio"
+            )
+            fila["BuscarEjercicio"] = palabra
 
-                nombre_original = (fila.get("Ejercicio","") or "").strip()
-                exact_on_load = bool(fila.get("_exact_on_load", False))  # 🔧 cambio clave
+            nombre_original = (fila.get("Ejercicio","") or "").strip()
+            exact_on_load = bool(fila.get("_exact_on_load", False))
 
-                # Lógica: si estamos en modo exacto y el usuario no cambió la búsqueda, lista = [nombre_original]
-                # Si el usuario escribe algo distinto al original, migramos a fuzzy y apagamos el modo exacto.
-                ejercicios_encontrados = []
-                if exact_on_load:
-                    if (not palabra.strip()) or (normalizar_texto(palabra) == normalizar_texto(nombre_original)):
-                        if nombre_original:
-                            ejercicios_encontrados = [nombre_original]
-                        else:
-                            ejercicios_encontrados = []
-                    else:
-                        ejercicios_encontrados = _buscar_fuzzy(palabra)
-                        fila["_exact_on_load"] = False  # 🔧 ya se salió del modo exacto
+            if exact_on_load:
+                if (not palabra.strip()) or (normalizar_texto(palabra) == normalizar_texto(nombre_original)):
+                    ejercicios_encontrados = [nombre_original] if nombre_original else []
                 else:
                     ejercicios_encontrados = _buscar_fuzzy(palabra)
-
-                # Resguardo: si no hay resultados, mantenemos el original como única opción
-                if not ejercicios_encontrados and nombre_original:
-                    ejercicios_encontrados = [nombre_original]
-
-                # Remover duplicados preservando orden
-                vistos = set()
-                ejercicios_encontrados = [e for e in ejercicios_encontrados if not (e in vistos or vistos.add(e))]
-
-                seleccionado = cols[2].selectbox(
-                    "", ejercicios_encontrados if ejercicios_encontrados else ["(sin resultados)"],
-                    key=f"select_{key_entrenamiento}", label_visibility="collapsed"
-                )
-                if seleccionado != "(sin resultados)":
-                    fila["Ejercicio"] = seleccionado
-                    fila["Video"] = (ejercicios_dict.get(seleccionado, {}) or {}).get("video", "").strip()
+                    fila["_exact_on_load"] = False
             else:
-                cols[1].markdown("&nbsp;", unsafe_allow_html=True)
-                fila["Ejercicio"] = cols[2].text_input(
-                    "", value=fila.get("Ejercicio",""),
-                    key=f"ej_{key_entrenamiento}", label_visibility="collapsed", placeholder="Nombre del ejercicio"
-                )
+                ejercicios_encontrados = _buscar_fuzzy(palabra)
+
+            if not ejercicios_encontrados and nombre_original:
+                ejercicios_encontrados = [nombre_original]
+
+            vistos = set()
+            ejercicios_encontrados = [e for e in ejercicios_encontrados if not (e in vistos or vistos.add(e))]
+
+            if not ejercicios_encontrados and palabra.strip():
+                ejercicios_encontrados = [palabra.strip()]
+            elif not ejercicios_encontrados:
+                ejercicios_encontrados = ["(sin resultados)"]
+
+            seleccionado = cols[2].selectbox(
+                "", ejercicios_encontrados,
+                key=f"select_{key_entrenamiento}", label_visibility="collapsed"
+            )
+            if seleccionado == "(sin resultados)":
+                fila["Ejercicio"] = palabra.strip()
+            else:
+                fila["Ejercicio"] = seleccionado
+            fila["Video"] = (ejercicios_dict.get(fila.get("Ejercicio",""), {}) or {}).get("video", "").strip()
 
             # Detalle
             fila["Detalle"] = cols[3].text_input(
@@ -452,8 +388,36 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                 st.session_state.pop(f"multiselect_{key_entrenamiento}_{idx}", None)
                 st.session_state.pop(f"do_copy_{key_entrenamiento}_{idx}", None)
 
-        submitted = st.form_submit_button("Actualizar sección", type="primary")
+        action_cols = st.columns([1,5,1], gap="small")
+        with action_cols[0]:
+            submitted = st.form_submit_button("Actualizar sección", type="primary")
+        with action_cols[2]:
+            limpiar_clicked = st.form_submit_button("Limpiar sección", type="secondary")
+
+        pending_key = f"pending_clear_{key_seccion}"
+
+        if limpiar_clicked:
+            if st.session_state.get(pending_key):
+                fila_vacia = _fila_vacia(seccion)
+                fila_vacia["BuscarEjercicio"] = ""
+                fila_vacia["Ejercicio"] = ""
+                st.session_state[key_seccion] = [fila_vacia]
+
+                prefix = f"{i}_{seccion.replace(' ','_')}_"
+                for key in list(st.session_state.keys()):
+                    if key.startswith(f"multiselect_{prefix}") or key.startswith(f"do_copy_{prefix}"):
+                        st.session_state.pop(key, None)
+                st.session_state.pop(pending_key, None)
+                st.success("Sección limpiada ✅")
+                st.rerun()
+            else:
+                st.session_state[pending_key] = True
+
+        if st.session_state.get(pending_key):
+            st.warning("Vuelve a presionar **Limpiar sección** para confirmar el borrado.")
+
         if submitted:
+            st.session_state.pop(pending_key, None)
             for idx, fila in enumerate(st.session_state[key_seccion]):
                 key_entrenamiento = f"{i}_{seccion.replace(' ','_')}_{idx}"
                 do_copy_key = f"do_copy_{key_entrenamiento}_{idx}"
@@ -630,7 +594,6 @@ def editar_rutinas():
 
             st.success(f"✅ Cambios aplicados en {total} semana(s) (incluida la actual).")
 
-# Para ejecuciónes directa en Streamlit multipage
+# Para ejecución directa en Streamlit multipage
 if __name__ == "__main__":
     editar_rutinas()
-

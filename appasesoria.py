@@ -4,22 +4,32 @@ import streamlit as st
 # 1) SIEMPRE PRIMERO
 st.set_page_config(page_title="Aplicación Asesorías", layout="wide")
 
-# 2) Soft login
-from soft_login_full import soft_login_barrier, soft_logout
+def _goto(menu_label: str):
+    st.session_state["_menu_target"] = menu_label
+    st.rerun()
 
-# 3) Firebase
+# 2) Soft login (usa el módulo que ya probaste)
+from soft_login_full import soft_login_barrier, soft_logout
+from inicio import inicio_deportista, SEGUIMIENTO_LABEL
+# 3) Imports del resto de la app
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app
+from seguimiento_entrenamiento import app as seguimiento_app  # NUEVO
+from seccion_ejercicios import base_ejercicios
+from vista_rutinas import ver_rutinas
+from borrar_rutinas import borrar_rutinas
+from ingresar_cliente_view import ingresar_cliente_o_video_o_ejercicio
+from crear_planificaciones import crear_rutinas
+from editar_rutinas import editar_rutinas
+from crear_descarga import descarga_rutina
+from reportes import ver_reportes
+from admin_resumen import ver_resumen_entrenadores  # si no lo usas, puedes comentar
 
-# 4) Router por rol
-from rol_router import set_role_adapter, run_feature, can, ROL_ADMIN, ROL_ENTRENADOR, ROL_DEPORTISTA
+# ➕ utilidades para cargar el módulo de seguimiento
+import importlib
 
-# 5) Registrar implementaciones de features de esta app (IMPORTANTE)
-#    Este import realiza el registro (@exponer) de todas las features.
-import funciones_asesoria  # noqa: F401
-
-# ===== Estilos (opcional) =====
+# 4) Estilos (opcional)
 st.markdown("""
 <style>
 @media (prefers-color-scheme: light) {
@@ -32,117 +42,223 @@ st.markdown("""
   div[data-testid="stMarkdownContainer"] { color: #ffffff !important; }
   input, textarea, select { color: #ffffff !important; }
 }
+.main .block-container {
+  padding-top: 0.2rem !important;
+}
+.app-header-card {
+  background: #0b1018;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 14px;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.app-header-card__label {
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.65);
+}
+.app-header-card__value {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+div[data-testid="stButton"][data-key="btn_back_inicio"] button {
+  background: linear-gradient(135deg, #34d399, #10b981) !important;
+  color: #012b1a !important;
+  border: 1px solid rgba(16, 185, 129, 0.4) !important;
+  box-shadow: none !important;
+}
+
+div[data-testid="stButton"][data-key="btn_refresh"] button {
+  background: linear-gradient(135deg, #38bdf8, #0ea5e9) !important;
+  color: #01243b !important;
+  border: 1px solid rgba(14, 165, 233, 0.45) !important;
+  box-shadow: none !important;
+}
+
+div[data-testid="stButton"][data-key="btn_logout"] button {
+  background: linear-gradient(135deg, #f97316, #ef4444) !important;
+  color: #fff !important;
+  border: 1px solid rgba(249, 115, 22, 0.45) !important;
+  box-shadow: none !important;
+}
+
+div[data-testid="stButton"][data-key="btn_back_inicio"] button {
+  background: linear-gradient(135deg, #34d399, #10b981) !important;
+  color: #012b1a !important;
+  border: 1px solid rgba(16, 185, 129, 0.4) !important;
+  box-shadow: none !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# ===== Firebase (una sola vez) =====
+# 5) Inicializar Firebase (una sola vez)
 if not firebase_admin._apps:
     cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
     cred = credentials.Certificate(cred_dict)
     initialize_app(cred)
 db = firestore.client()
 
-# ===== Soft login barrier =====
-# Nota: si en tu flujo el login no requiere roles para mostrar la home, deja required_roles=None
+# 6) Barrera de Soft Login (persistente con cookie)
+#    Cambia required_roles si quieres restringir el ingreso a ciertos roles globalmente.
 if not soft_login_barrier(titulo="Bienvenido a Momentum", required_roles=None):
     st.stop()
 
-# ===== Estado lateral + logout =====
+# 7) Menú principal según rol
 email = st.session_state.get("correo", "")
 rol = (st.session_state.get("rol") or "").lower()
-st.sidebar.success(f"Conectado: {email} ({rol})")
-if st.sidebar.button("Cerrar sesión", key="btn_logout"):
-    soft_logout()
 
-# ===== Conectar el router a tu rol actual =====
-def _resolver_rol_actual():
-    return (st.session_state.get("rol") or "").lower()
-set_role_adapter(_resolver_rol_actual)
+label_seg_2 = "seguimiento_entrenamiento"
+is_admin = rol in ("admin", "administrador") or (
+    email and st.secrets.get("ADMIN_EMAIL", "").lower() == email.lower()
+)
 
-# ===== Helper para ejecutar features con captura de errores =====
-def run_safe(feature_name: str):
-    try:
-        run_feature(feature_name)
-    except Exception as e:
-        st.error(f"Ocurrió un error al cargar la sección: {feature_name}")
-        st.exception(e)
-
-# ===== Home si es deportista (directo a ver rutinas) =====
-if rol == ROL_DEPORTISTA:
-    st.title("🏋️ Tu Rutina")
-    run_safe("ver_rutinas")
-    st.stop()
-
-# ===== Menú dinámico según permisos =====
-st.sidebar.title("Menú principal")
-
-# Mapeo de etiquetas -> feature
-MENU_ITEMS = [
-    ("Inicio", None),
-    ("Ver Rutinas", "ver_rutinas"),
-    ("Crear Rutinas", "crear_rutinas"),
-    ("Ingresar Deportista o Ejercicio", "gestionar_clientes"),
-    ("Borrar Rutinas", None),             # sigue “local” (si quieres, llévalo al router)
-    ("Editar Rutinas", "editar_rutinas"),
-    ("Ejercicios", "ejercicios"),
-    ("Crear Descarga", "descargar_rutinas"),
-    ("Reportes", "ver_reportes"),
-    ("Resumen (Admin)", "resumen_admin"),
+MENU_DEPORTISTA = [
+    "Inicio",
+    "Ver Rutinas",
+    "Crear Descarga",
 ]
 
-# Filtrar items por permisos del rol actual (si tiene feature/capability)
-def visible_for_role(label: str, feature: str | None) -> bool:
-    if feature is None:
-        return True
-    return can(rol, feature)
+MENU_ENTRENADOR = [
+    "Inicio",
+    "Ver Rutinas",
+    "Crear Rutinas",
+    "Ingresar Deportista o Ejercicio",
+    "Borrar Rutinas",
+    "Editar Rutinas",
+    "Ejercicios",
+    "Crear Descarga",
+    "Reportes",
+    SEGUIMIENTO_LABEL,
+]
 
-menu_labels = [lbl for (lbl, feat) in MENU_ITEMS if visible_for_role(lbl, feat)]
-opcion = st.sidebar.radio("Selecciona una opción:", menu_labels, index=0)
+MENU_ADMIN = MENU_ENTRENADOR + ["Resumen (Admin)"]
 
-# ===== Render según selección =====
+if is_admin:
+    opciones_menu = MENU_ADMIN
+elif rol == "entrenador":
+    opciones_menu = MENU_ENTRENADOR
+else:
+    opciones_menu = MENU_DEPORTISTA
+
+target_menu = st.session_state.pop("_menu_target", None)
+if "menu_radio" not in st.session_state:
+    st.session_state["menu_radio"] = opciones_menu[0]
+
+def _normalizar_menu(value: str | None) -> str:
+    if value in (label_seg_2, SEGUIMIENTO_LABEL):
+        return SEGUIMIENTO_LABEL
+    return value or ""
+
+if target_menu is not None:
+    target_menu = _normalizar_menu(target_menu)
+    if target_menu in opciones_menu:
+        st.session_state["menu_radio"] = target_menu
+    else:
+        st.session_state["menu_radio"] = opciones_menu[0]
+
+menu_actual = _normalizar_menu(st.session_state.get("menu_radio"))
+if menu_actual not in opciones_menu:
+    menu_actual = opciones_menu[0]
+    st.session_state["menu_radio"] = menu_actual
+
+header = st.container()
+with header:
+    mostrar_back = menu_actual != "Inicio"
+    cols = st.columns([6, 1, 1, 1], gap="small") if mostrar_back else st.columns([6, 1, 1], gap="small")
+
+    with cols[0]:
+        st.markdown(
+            f"""
+            <div class="app-header-card">
+              <span class="app-header-card__label">Sesión activa</span>
+              <span class="app-header-card__value">{email or 'Sin correo'}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    col_offset = 1
+    if mostrar_back:
+        with cols[1]:
+            if st.button(
+                "⬅️",
+                key="btn_back_inicio",
+                type="secondary",
+                use_container_width=True,
+                help="Volver al inicio",
+            ):
+                _goto("Inicio")
+        col_offset = 2
+
+    with cols[col_offset]:
+        if st.button(
+            "🔄",
+            key="btn_refresh",
+            type="secondary",
+            use_container_width=True,
+            help="Actualizar datos",
+        ):
+            st.cache_data.clear()
+            st.rerun()
+
+    with cols[col_offset + 1]:
+        if st.button(
+            "🚪",
+            key="btn_logout",
+            type="secondary",
+            use_container_width=True,
+            help="Cerrar sesión",
+        ):
+            soft_logout()
+
+opcion = menu_actual
+
+# 10) Ruteo
 if opcion == "Inicio":
-    primer_nombre = st.session_state.get("primer_nombre") or (
-        email.split("@")[0].title() if email else "Usuario"
-    )
-    st.markdown(f"""
-        <div style='text-align: center; margin-top: 20px;'>
-            <img src='https://i.ibb.co/YL1HbLj/motion-logo.png' width='100' alt='Momentum Logo'><br>
-            <h1 style="font-weight: 800; margin: 8px 0;">
-                👋 Hola {primer_nombre}! — Bienvenido a Momentum
-            </h1>
-            <p style='font-size:18px; margin: 0;'>Selecciona una opción del menú para comenzar</p>
-        </div>
-        """, unsafe_allow_html=True)
+    inicio_deportista()   # ← SIEMPRE aterriza en Inicio
 
 elif opcion == "Ver Rutinas":
-    run_safe("ver_rutinas")
+    st.session_state.pop("dia_sel", None)   # opcional
+    ver_rutinas()
 
 elif opcion == "Crear Rutinas":
-    run_safe("crear_rutinas")
+    if rol in ("entrenador", "admin", "administrador"):
+        crear_rutinas()
+    else:
+        st.warning("No tienes permisos para crear rutinas.")
 
 elif opcion == "Ingresar Deportista o Ejercicio":
-    run_safe("gestionar_clientes")
+    ingresar_cliente_o_video_o_ejercicio()
 
 elif opcion == "Borrar Rutinas":
-    # “Local”: no pasa por router aún
-    from borrar_rutinas import borrar_rutinas
-    try:
-        borrar_rutinas()
-    except Exception as e:
-        st.error("No se pudo cargar Borrar Rutinas.")
-        st.exception(e)
+    borrar_rutinas()
 
 elif opcion == "Editar Rutinas":
-    run_safe("editar_rutinas")
+    editar_rutinas()
 
 elif opcion == "Ejercicios":
-    run_safe("ejercicios")
+    base_ejercicios()
 
 elif opcion == "Crear Descarga":
-    run_safe("descargar_rutinas")
+    descarga_rutina()
 
 elif opcion == "Reportes":
-    run_safe("ver_reportes")
+    ver_reportes()
+
+elif opcion in (SEGUIMIENTO_LABEL, label_seg_2):
+    if rol in ("entrenador", "admin", "administrador"):
+        st.header("📈 Seguimiento (Entre Evaluaciones)")
+        seguimiento_app()
+    else:
+        st.warning("No tienes permisos para acceder a Seguimiento.")
 
 elif opcion == "Resumen (Admin)":
-    run_safe("resumen_admin")
+    if is_admin:
+        ver_resumen_entrenadores()
+    else:
+        st.warning("Solo disponible para administradores.")

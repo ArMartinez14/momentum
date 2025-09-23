@@ -5,6 +5,8 @@ from firebase_admin import credentials, firestore
 import unicodedata
 import json
 import re
+import csv
+from io import StringIO
 from datetime import datetime
 
 # 👇 servicio de catálogos (tuyo)
@@ -125,6 +127,27 @@ def es_admin() -> bool:
             pass
     return False
 
+@st.cache_data(show_spinner=False)
+def listar_entrenadores():
+    coaches = []
+    try:
+        for snap in db.collection("usuarios").stream():
+            if not snap.exists:
+                continue
+            data = snap.to_dict() or {}
+            rol = (data.get("rol") or data.get("role") or "").strip().lower()
+            if rol not in {"entrenador", "admin", "administrador"}:
+                continue
+            correo = (data.get("correo") or "").strip().lower()
+            if not correo:
+                continue
+            nombre = (data.get("nombre") or correo).strip()
+            coaches.append((nombre, correo))
+    except Exception:
+        pass
+    coaches.sort(key=lambda item: item[0].lower())
+    return coaches
+
 # ====== select con “agregar nuevo” (igual) ======
 def combo_con_agregar(titulo: str, opciones: list[str], key_base: str, valor_inicial: str = "") -> str:
     SENTINEL = "➕ Agregar nuevo…"
@@ -229,12 +252,10 @@ def _set_mode(m):
 def _get_mode() -> str:
     return st.session_state.get("admin_panel_mode", "menu")
 
-def _btn_volver():
-    cols = st.columns([1, 6])
-    with cols[0]:
-        if st.button("← Volver", type="secondary", use_container_width=True):
-            _set_mode("menu")
-            st.rerun()
+def _panel_back_button():
+    if st.button("Regresar al menú del panel", type="secondary"):
+        _set_mode("menu")
+        st.rerun()
 
 # ==========================
 # 🧩 Pantalla: Menú por tarjetas
@@ -243,7 +264,7 @@ def _render_menu():
     st.markdown("<h2 class='h-accent'>Panel de Administración</h2>", unsafe_allow_html=True)
     st.caption("Elige qué deseas gestionar.")
 
-    colA, colB = st.columns(2, gap="large")
+    colA, colB, colC = st.columns(3, gap="large")
 
     with colA:
         if st.button("👤\n### Ingresar Cliente\nCrear un nuevo cliente y asignar rol.",
@@ -255,11 +276,17 @@ def _render_menu():
                      key="card_ejercicio", use_container_width=True):
             _set_mode("ejercicio"); st.rerun()
 
+    with colC:
+        if st.button("📤\n### Importar Ejercicios\nCarga un archivo CSV para crear ejercicios.",
+                     key="card_carga", use_container_width=True):
+            _set_mode("carga_csv"); st.rerun()
+
     # 🔥 estilos para que parezcan tarjetas
     st.markdown(f"""
     <style>
     div.stButton > button#card_cliente,
-    div.stButton > button#card_ejercicio {{
+    div.stButton > button#card_ejercicio,
+    div.stButton > button#card_carga {{
         background: var(--surface) !important;
         color: {TEXT_MAIN} !important;
         border: 1px solid {STROKE} !important;
@@ -272,7 +299,8 @@ def _render_menu():
         transition: all .12s ease-in-out !important;
     }}
     div.stButton > button#card_cliente:hover,
-    div.stButton > button#card_ejercicio:hover {{
+    div.stButton > button#card_ejercicio:hover,
+    div.stButton > button#card_carga:hover {{
         background: linear-gradient(180deg,#0E1621,#0F1B27) !important;
         border-color: {PRIMARY} !important;
         transform: translateY(-2px);
@@ -285,44 +313,72 @@ def _render_menu():
 # 👤 Formulario: Cliente
 # ==========================
 def _render_cliente():
-    _btn_volver()
+    _panel_back_button()
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown("<h4 class='h-accent'>👤 Cliente Nuevo</h4>", unsafe_allow_html=True)
 
-    nombre = st.text_input("Nombre del cliente:")
+    st.markdown("<div class='muted'>Completa los datos básicos del cliente. El nombre y correo son obligatorios.</div>", unsafe_allow_html=True)
+
+    nombre = st.text_input("Nombre", placeholder="Ej.: María Fernández")
 
     if "correo_cliente_nuevo" in st.session_state:
         st.session_state["correo_cliente_nuevo"] = normalizar_correo(st.session_state["correo_cliente_nuevo"])
 
     correo_input = st.text_input(
-        "Correo del cliente:",
+        "Correo",
         key="correo_cliente_nuevo",
         on_change=_cb_normalizar_correo,
-        args=("correo_cliente_nuevo",)
+        args=("correo_cliente_nuevo",),
+        placeholder="nombre@dominio.com"
     )
     correo_limpio = st.session_state.get("correo_cliente_nuevo", "")
 
     if correo_input:
         st.caption(f"Se guardará como: **{correo_limpio or '—'}**")
 
+    correo_usuario = (st.session_state.get("correo") or "").strip().lower()
+    coach_responsable = correo_usuario
+
+    if es_admin():
+        entrenadores = listar_entrenadores()
+        if entrenadores:
+            labels = [f"{nombre} ({correo})" for nombre, correo in entrenadores]
+            try:
+                default_idx = next(idx for idx, (_, c) in enumerate(entrenadores) if c == correo_usuario)
+            except StopIteration:
+                default_idx = 0
+            elegido = st.selectbox(
+                "Entrenador responsable",
+                labels,
+                index=default_idx,
+                help="El coach que verá y gestionará a este cliente."
+            )
+            coach_responsable = entrenadores[labels.index(elegido)][1]
+        else:
+            st.info("No se encontraron entrenadores registrados; se asignará a tu correo por defecto.")
+
     if st.session_state.get("rol") == "admin":
         opciones_rol = ["deportista", "entrenador", "admin"]
     else:
         opciones_rol = ["deportista"]
 
-    rol = st.selectbox("Rol:", opciones_rol)
+    st.markdown("<hr class='hr-light'>", unsafe_allow_html=True)
+
+    rol = st.selectbox("Rol en la plataforma", opciones_rol, help="Define los permisos por defecto del cliente.")
+
+    st.markdown("<hr class='hr-light'>", unsafe_allow_html=True)
 
     cols_btn = st.columns([1,3])
     with cols_btn[0]:
-        if st.button("Guardar Cliente", type="primary"):
-            if not nombre:
+        if st.button("Guardar Cliente", type="primary", use_container_width=True):
+            if not nombre.strip():
                 st.warning("⚠️ Ingresa el nombre.")
                 st.markdown("</div>", unsafe_allow_html=True)
                 return
 
             correo_limpio = normalizar_correo(correo_input)
             if not correo_limpio:
-                st.warning("⚠️ Ingresa el correo.")
+                st.warning("⚠️ Ingresa un correo válido.")
                 st.markdown("</div>", unsafe_allow_html=True)
                 return
 
@@ -338,11 +394,17 @@ def _render_cliente():
                 return
 
             doc_id = normalizar_id(correo_limpio)
-            data = {"nombre": nombre, "correo": correo_limpio, "rol": rol}
+            data = {
+                "nombre": nombre.strip(),
+                "correo": correo_limpio,
+                "rol": rol,
+                "creado_en": datetime.utcnow(),
+                "coach_responsable": coach_responsable,
+            }
 
             try:
                 db.collection("usuarios").document(doc_id).set(data)
-                st.success(f"✅ Cliente '{nombre}' guardado correctamente con correo: {correo_limpio}")
+                st.success(f"✅ Cliente '{nombre.strip()}' guardado correctamente")
             except Exception as e:
                 st.error(f"❌ Error al guardar: {e}")
     st.markdown("</div>", unsafe_allow_html=True)
@@ -351,9 +413,10 @@ def _render_cliente():
 # 🏋️ Formulario: Ejercicio
 # ==========================
 def _render_ejercicio():
-    _btn_volver()
+    _panel_back_button()
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown("<h4 class='h-accent'>📌 Crear o Editar Ejercicio</h4>", unsafe_allow_html=True)
+    st.markdown("<div class='muted'>Usa este formulario para registrar ejercicios con su clasificación. Los campos marcados son obligatorios.</div>", unsafe_allow_html=True)
 
     correo_usuario = (st.session_state.get("correo") or "").strip().lower()
     if not correo_usuario:
@@ -387,13 +450,15 @@ def _render_ejercicio():
     catalogo_maquinas= cat.get("maquinas", [])
 
     # === # === FORMULARIO ===
+    st.markdown("<hr class='hr-light'>", unsafe_allow_html=True)
+
     col1, col2 = st.columns(2)
     with col1:
-        marca = st.text_input("Marca (opcional):", value=datos.get("marca", ""), key="marca").strip()
+        marca = st.text_input("Marca", value=datos.get("marca", ""), key="marca", placeholder="Ej.: TRX", help="Opcional: identifica el implemento o fabricante").strip()
     with col2:
-        maquina = st.text_input("Máquina (opcional):", value=datos.get("maquina", ""), key="maquina").strip()
+        maquina = st.text_input("Máquina", value=datos.get("maquina", ""), key="maquina", placeholder="Ej.: Remo sentado", help="Opcional: nombre del equipo").strip()
 
-    detalle = st.text_input("Detalle:", value=datos.get("detalle", ""), key="detalle")
+    detalle = st.text_input("Detalle *", value=datos.get("detalle", ""), key="detalle", placeholder="Descripción breve del ejercicio")
 
     col3, col4 = st.columns(2)
     with col3:
@@ -446,7 +511,7 @@ def _render_ejercicio():
 
     # Nombre visible
     nombre_ej = " ".join([x for x in [marca, maquina, detalle] if x]).strip()
-    st.text_input("Nombre completo del ejercicio:", value=nombre_ej, key="nombre", disabled=True)
+    st.text_input("Nombre completo", value=nombre_ej, key="nombre", disabled=True, help="Se compone automáticamente con Marca, Máquina y Detalle; modifícalo al guardar si lo requieres.")
 
     publico_default = True if admin else False
     publico_check = st.checkbox("Hacer público (visible para todos los entrenadores)", value=publico_default)
@@ -456,6 +521,7 @@ def _render_ejercicio():
         if st.button("💾 Guardar Ejercicio", key="btn_guardar_ejercicio", type="primary"):
             # Validaciones mínimas
             faltantes = [etq for etq, val in {
+                "Detalle": detalle,
                 "Característica": caracteristica,
                 "Patrón de Movimiento": patron,
                 "Grupo Muscular Principal": grupo_p
@@ -531,6 +597,121 @@ def _render_ejercicio():
 # ==========================
 # 🚀 Punto de entrada
 # ==========================
+def _render_carga_csv():
+    _panel_back_button()
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("<h4 class='h-accent'>📤 Importar ejercicios desde archivo</h4>", unsafe_allow_html=True)
+    st.caption(
+        "El CSV debe incluir las columnas **Detalle**, **Caracteristica** y **Patron de Movimiento** (obligatorias)."
+        " Puedes añadir también **Marca**, **Maquina**, **Grupo Muscular Principal**, **Grupo Muscular Secundario** y opcionalmente `Publico`."
+    )
+
+    archivo = st.file_uploader("Archivo CSV", type=["csv"], help="Usa codificación UTF-8. Cada fila crea o actualiza un ejercicio.")
+    if not archivo:
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    try:
+        contenido = archivo.getvalue().decode("utf-8-sig")
+        reader = csv.DictReader(StringIO(contenido))
+        filas = [row for row in reader if any((row.get(col) or "").strip() for col in reader.fieldnames or [])]
+    except Exception as exc:
+        st.error(f"No se pudo leer el archivo: {exc}")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    if not filas:
+        st.warning("El archivo no contiene filas válidas.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    st.dataframe(filas[:10])
+
+    correo_usuario = (st.session_state.get("correo") or "").strip().lower()
+    if not correo_usuario:
+        st.error("No se detectó un usuario autenticado. Inicia sesión nuevamente.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    admin = es_admin()
+    headers_norm = { (h or "").strip().lower(): h for h in (reader.fieldnames or []) }
+    obligatorias = ["detalle", "caracteristica", "patron de movimiento"]
+    faltantes = [nombre for nombre in obligatorias if nombre not in headers_norm]
+    if faltantes:
+        st.warning("Faltan columnas obligatorias en el CSV: " + ", ".join(sorted(faltantes)))
+
+    if st.button("Importar ejercicios", type="primary", key="btn_importar_csv"):
+        guardados = 0
+        errores = []
+        for idx, row in enumerate(filas, start=1):
+            try:
+                def _val(nombre, *aliases):
+                    for alias in (nombre, *aliases):
+                        if alias in headers_norm:
+                            return (row.get(headers_norm[alias]) or "").strip()
+                    return ""
+
+                marca = _val("marca")
+                maquina = _val("maquina")
+                detalle = _val("detalle")
+                caracteristica = _val("caracteristica")
+                patron = _val("patron de movimiento")
+                grupo_p = _val("grupo muscular principal")
+                grupo_s = _val("grupo muscular secundario")
+
+                if not (detalle and caracteristica and patron):
+                    raise ValueError("faltan datos clave (detalle, característica o patrón)")
+
+                nombre = (row.get("nombre") or "").strip()
+                if not nombre:
+                    nombre = " ".join(filter(None, [marca, maquina, detalle])).strip()
+                if not nombre:
+                    raise ValueError("nombre vacío")
+
+                publico_raw = _val("publico")
+                publico_raw = publico_raw.lower()
+                publico = publico_raw in {"1", "true", "si", "sí", "publico", "public", "yes"}
+                if not admin:
+                    publico = False
+
+                id_impl = _resolver_id_implemento(db, marca, maquina)
+                doc_id = normalizar_texto(nombre)
+
+                payload = {
+                    "nombre": nombre,
+                    "marca": marca,
+                    "maquina": maquina,
+                    "detalle": detalle,
+                    "caracteristica": caracteristica,
+                    "patron_de_movimiento": patron,
+                    "grupo_muscular_principal": grupo_p,
+                    "grupo_muscular_secundario": grupo_s,
+                    "id_implemento": id_impl,
+                    "publico": bool(publico),
+                    "actualizado_por": correo_usuario,
+                    "fecha_actualizacion": datetime.utcnow(),
+                    "entrenador": correo_usuario,
+                }
+
+                db.collection("ejercicios").document(doc_id).set({
+                    **payload,
+                    "creado_por": correo_usuario,
+                    "fecha_creacion": datetime.utcnow(),
+                }, merge=True)
+                guardados += 1
+            except Exception as exc:
+                errores.append((idx, str(exc)))
+
+        if guardados:
+            st.success(f"✅ Ejercicios guardados: {guardados}")
+        if errores:
+            st.warning("Se encontraron errores en algunas filas:")
+            for fila, err in errores:
+                st.write(f"- Fila {fila}: {err}")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 def ingresar_cliente_o_video_o_ejercicio():
     mode = _get_mode()
     if mode == "menu":
@@ -539,6 +720,8 @@ def ingresar_cliente_o_video_o_ejercicio():
         _render_cliente()
     elif mode == "ejercicio":
         _render_ejercicio()
+    elif mode == "carga_csv":
+        _render_carga_csv()
     else:
         _set_mode("menu"); _render_menu()
 
