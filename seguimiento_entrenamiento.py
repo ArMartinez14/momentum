@@ -250,14 +250,21 @@ def iter_ejercicios_en_rango(db, correo: str, desde: date, hasta: date,
                 series   = safe_int(ej.get("series", 0), 0)
                 reps_min = parse_reps_min(ej.get("reps_min", ej.get("reps")))
                 reps_min = safe_int(reps_min or 0, 0)
-                peso     = safe_float(ej.get("peso", 0), 0.0)
+                peso_plan = safe_float(ej.get("peso", 0), 0.0)
+                peso_alc  = safe_float(
+                    ej.get("peso_alcanzado")
+                    or ej.get("Peso_alcanzado")
+                    or ej.get("PesoAlcanzado"),
+                    0.0,
+                )
 
                 yield {
                     "fecha": fecha_dia,
                     "ejercicio": ej.get("ejercicio"),
                     "series": series,
                     "reps_min": reps_min,
-                    "peso": peso
+                    "peso": peso_plan,
+                    "peso_alcanzado": peso_alc,
                 }
 
 
@@ -413,6 +420,16 @@ def app():
         excluir_warmup = st.toggle("Excluir **Warm Up**", value=True,
                                    help="Si está activo, no contabiliza ejercicios cuyo bloque/sección sea Warm Up.")
 
+    vista_opciones = ["Resumen general", "Ejercicio específico"]
+    modo_vista = st.radio(
+        "Modo de análisis",
+        vista_opciones,
+        index=st.session_state.get("_seg_modo_vista", 0),
+        horizontal=True,
+        key="_seg_radio_modo"
+    )
+    st.session_state["_seg_modo_vista"] = vista_opciones.index(modo_vista)
+
     colD, colE = st.columns(2)
     with colD:
         evals = listar_evaluaciones_cliente(db, correo_sel) if correo_sel else []
@@ -455,22 +472,44 @@ def app():
                 db, correo_sel, fecha_ini, fecha_fin,
                 usar_real=usar_real, excluir_warmup=excluir_warmup
             ))
+            df_raw = pd.DataFrame(ejercicios)
+            if not df_raw.empty:
+                df_raw["peso"] = df_raw["peso"].apply(lambda x: safe_float(x, 0.0))
+                if "peso_alcanzado" in df_raw.columns:
+                    df_raw["peso_alcanzado"] = df_raw["peso_alcanzado"].apply(lambda x: safe_float(x, 0.0))
+                else:
+                    df_raw["peso_alcanzado"] = 0.0
+                df_raw["fecha"] = pd.to_datetime(df_raw["fecha"]).dt.date
             df = agrupar_por_semana(ejercicios)
             df_totales, df_prom = resumen_semanal(df)
 
-        if df.empty:
-            st.error("No se encontraron ejercicios en el rango seleccionado con los criterios actuales.")
-            return
+        st.session_state["_seg_df_raw"] = df_raw
+        st.session_state["_seg_df_totales"] = df_totales
+        st.session_state["_seg_df_prom"] = df_prom
+        st.session_state["_seg_modo_vista_last"] = modo_vista
 
-        st.success("✅ Resumen generado (solo visual, no se guarda).")
+    df_raw = st.session_state.get("_seg_df_raw", pd.DataFrame())
+    df_totales = st.session_state.get("_seg_df_totales", pd.DataFrame())
+    df_prom = st.session_state.get("_seg_df_prom", pd.DataFrame())
+    modo_vista_last = st.session_state.get("_seg_modo_vista_last", modo_vista)
 
+    if df_raw.empty:
+        st.info("Carga un cálculo para ver resultados.")
+        return
+
+    st.success("✅ Resumen generado (solo visual, no se guarda).")
+    import matplotlib.pyplot as plt
+
+    if modo_vista == "Resumen general" or modo_vista_last == "Resumen general":
+        if modo_vista != "Resumen general":
+            st.info("El resumen general se calculó, cambia a ese modo si quieres verlo.")
+
+    if modo_vista == "Resumen general":
         st.markdown("### Totales por **Semana × Categoría**")
         st.dataframe(df_totales, use_container_width=True)
 
         st.markdown("### Promedio **semanal** por Categoría")
         st.dataframe(df_prom, use_container_width=True)
-
-        import matplotlib.pyplot as plt
 
         # --- Tonelaje: área apilada ---
         st.markdown("#### Tonelaje por semana (área apilada)")
@@ -512,24 +551,16 @@ def app():
         ax4.set_title("Proporción de series por categoría (promedio)")
         st.pyplot(fig4)
 
-        # --- Volumen vs Intensidad (barras + línea, doble eje) ---
-        # --- Volumen vs Intensidad: ambas en un mismo gráfico de líneas ---
+        # --- Volumen vs Intensidad ---
         st.markdown("#### Volumen vs Intensidad (comparación en una misma escala)")
-
-        # Agregados por semana
         vol_semana = df_totales.groupby("semana", as_index=True)["volumen"].sum().sort_index()
         ton_semana = df_totales.groupby("semana", as_index=True)["tonelaje"].sum().sort_index()
-
-        # Intensidad media = tonelaje / volumen
         int_semana = ton_semana / vol_semana.replace(0, pd.NA)
-
-        # Normalizamos ambos para compararlos en la misma escala (0–1)
         df_norm = pd.DataFrame({
             "Volumen (reps totales)": vol_semana,
             "Intensidad media (kg/rep)": int_semana
         })
         df_norm = df_norm / df_norm.max()
-
         fig, ax = plt.subplots()
         df_norm.plot(ax=ax, marker="o")
         ax.set_title("Volumen vs Intensidad (normalizado)")
@@ -537,8 +568,55 @@ def app():
         ax.set_ylabel("Valor normalizado (0–1)")
         ax.legend(loc="best")
         st.pyplot(fig)
-
         st.caption("👉 Los valores están normalizados para comparar tendencias; no representan cantidades absolutas.")
+
+    if modo_vista == "Ejercicio específico":
+        opciones_ej = sorted(set(str(e).strip() for e in df_raw["ejercicio"].dropna()))
+        if not opciones_ej:
+            st.warning("No se encontraron nombres de ejercicio para este rango.")
+            return
+        if "_seg_select_ejercicio" not in st.session_state or st.session_state["_seg_select_ejercicio"] not in opciones_ej:
+            st.session_state["_seg_select_ejercicio"] = opciones_ej[0]
+        ejercicio_sel = st.selectbox(
+            "Ejercicio",
+            opciones_ej,
+            key="_seg_select_ejercicio"
+        )
+        df_ej = df_raw[df_raw["ejercicio"] == ejercicio_sel].copy()
+        df_ej["peso_util"] = df_ej.apply(
+            lambda row: row["peso_alcanzado"] if safe_float(row.get("peso_alcanzado"), 0.0) > 0 else row["peso"],
+            axis=1,
+        )
+        df_ej = df_ej[df_ej["peso_util"].apply(lambda x: safe_float(x, 0.0) > 0)]
+
+        if df_ej.empty:
+            st.info("Ese ejercicio no tiene registros de peso en el rango seleccionado.")
+            return
+
+        df_ej["semana"] = df_ej["fecha"].apply(lambda f: f - timedelta(days=f.weekday()))
+        df_sem = df_ej.groupby("semana", as_index=False)["peso_util"].max().sort_values("semana")
+
+        st.markdown(f"### 📈 Progresión de peso — {ejercicio_sel}")
+        fig_ej, ax_ej = plt.subplots()
+        ax_ej.plot(df_sem["semana"], df_sem["peso_util"], marker="o", color="#0ea5e9")
+        ax_ej.set_xlabel("Semana")
+        ax_ej.set_ylabel("Peso máximo reportado (kg)")
+        ax_ej.set_title("Evolución del peso planificado/registrado")
+        ax_ej.grid(alpha=0.2)
+        st.pyplot(fig_ej)
+
+        st.markdown("#### Detalle de registros")
+        st.dataframe(
+            df_ej.sort_values("fecha")[["fecha", "series", "reps_min", "peso", "peso_alcanzado", "peso_util"]].rename(columns={
+                "fecha": "Fecha",
+                "series": "Series",
+                "reps_min": "Reps mín",
+                "peso": "Peso plan (kg)",
+                "peso_alcanzado": "Peso alcanzado (kg)",
+                "peso_util": "Peso usado en gráfico (kg)"
+            }),
+            use_container_width=True,
+        )
 
 # Ejecutable standalone (opcional)
 if __name__ == "__main__":
