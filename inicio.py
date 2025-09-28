@@ -83,6 +83,45 @@ def semana_actual_en_bloque(fechas_lunes: list[str]) -> tuple[int, int, str]:
     ultima = fechas[-1].strftime("%Y-%m-%d")
     return (idx, total, ultima)
 
+
+def _dia_finalizado(doc_dict: dict, dia_key: str) -> bool:
+    dia_key = str(dia_key)
+    rutina = doc_dict.get("rutina") or {}
+    if not isinstance(rutina, dict):
+        return False
+
+    flag_key = f"{dia_key}_finalizado"
+    if flag_key in rutina and rutina.get(flag_key) is True:
+        return True
+
+    fin_map = doc_dict.get("finalizados")
+    if isinstance(fin_map, dict):
+        val = fin_map.get(dia_key)
+        if isinstance(val, bool):
+            return val
+
+    estado_map = doc_dict.get("estado_por_dia")
+    if isinstance(estado_map, dict):
+        estado = str(estado_map.get(dia_key, "")).strip().lower()
+        if estado in {"fin", "final", "finalizado", "completado", "done"}:
+            return True
+
+    alt = doc_dict.get(f"dia_{dia_key}")
+    if isinstance(alt, dict) and bool(alt.get("finalizado")):
+        return True
+
+    return False
+
+
+def _contar_dias_semana(doc_dict: dict) -> tuple[int, int]:
+    rutina = doc_dict.get("rutina")
+    if not isinstance(rutina, dict):
+        return (0, 0)
+    dias = [k for k in rutina.keys() if str(k).isdigit()]
+    total = len(dias)
+    completados = sum(1 for k in dias if _dia_finalizado(doc_dict, k))
+    return (completados, total)
+
 def _fecha_lunes_hoy() -> str:
     hoy = datetime.now()
     lunes = hoy - timedelta(days=hoy.weekday())
@@ -414,19 +453,46 @@ def inicio_deportista():
                     return datetime.min
 
             ordenados = []
+            hoy_lunes_str = _fecha_lunes_hoy()
+
             for correo_cli, docs_cli in por_cliente.items():
                 nombre_cli = (docs_cli[-1].get("cliente") or correo_cli.split("@")[0] or "Cliente").strip()
                 sem_idx, sem_total, fecha_ult = _bloque_progress_para_cliente(docs_cli)
+                doc_semana_actual = max(
+                    (
+                        doc for doc in docs_cli
+                        if doc.get("fecha_lunes") and doc.get("fecha_lunes") <= hoy_lunes_str
+                    ),
+                    default=None,
+                    key=lambda d: d.get("fecha_lunes"),
+                )
+                if doc_semana_actual is None:
+                    doc_semana_actual = max(
+                        (doc for doc in docs_cli if doc.get("fecha_lunes")),
+                        default=None,
+                        key=lambda d: d.get("fecha_lunes"),
+                    )
+                dias_comp, dias_total = _contar_dias_semana(doc_semana_actual or {})
                 try:
                     fecha_dt = datetime.strptime(fecha_ult, "%Y-%m-%d") if fecha_ult else datetime.min
                 except Exception:
                     fecha_dt = datetime.min
-                ordenados.append((correo_cli, docs_cli, nombre_cli, sem_idx, sem_total, fecha_ult, fecha_dt))
+                ordenados.append((
+                    correo_cli,
+                    docs_cli,
+                    nombre_cli,
+                    sem_idx,
+                    sem_total,
+                    fecha_ult,
+                    fecha_dt,
+                    dias_comp,
+                    dias_total,
+                ))
 
             ordenados.sort(key=lambda item: item[6])
 
             cols = st.columns(2, gap="medium")
-            for idx, (correo_cli, docs_cli, nombre_cli, sem_idx, sem_total, fecha_ult, _) in enumerate(ordenados):
+            for idx, (correo_cli, docs_cli, nombre_cli, sem_idx, sem_total, fecha_ult, _, dias_comp, dias_total) in enumerate(ordenados):
                 with cols[idx % 2]:
                     badge_html = ""
                     info_comentario = comentarios_recientes.get(correo_cli)
@@ -449,11 +515,15 @@ def inicio_deportista():
                         f"<span>🗓️ {fecha_ult or '—'}</span>"
                         "</span>"
                     )
+                    dias_label = "—/—"
+                    if dias_total:
+                        dias_label = f"{dias_comp}/{dias_total}"
                     st.markdown(
                         f"""
                         <div class="card">
                           <div style="font-weight:800; font-size:1.05rem;">{nombre_cli}</div>
                           <div class='muted' style='margin-top:6px;'>Bloque: Semana {sem_idx or '—'} de {sem_total or '—'}</div>
+                          <div class='muted' style='margin-top:2px;'>Días completados: {dias_label}</div>
                           <div style='margin-top:8px;'>{fecha_badge}</div>
                           {badge_html}
                         </div>
