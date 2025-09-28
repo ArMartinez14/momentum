@@ -847,11 +847,19 @@ def crear_rutinas():
                         # Buscar + Ejercicio (INLINE con alta si no existe)
                         # =======================
                         # --- Buscador de ejercicios (Warm Up y Work Out)
+                        buscar_key = f"buscar_{key_entrenamiento}"
+                        if buscar_key not in st.session_state:
+                            st.session_state[buscar_key] = fila.get("BuscarEjercicio", "")
+                        previo_buscar = fila.get("BuscarEjercicio", "")
                         palabra = cols[pos["Buscar Ejercicio"]].text_input(
-                            "", value=fila.get("BuscarEjercicio", ""),
-                            key=f"buscar_{key_entrenamiento}",
+                            "",
+                            value=st.session_state[buscar_key],
+                            key=buscar_key,
                             label_visibility="collapsed", placeholder="Buscar ejercicio…"
                         )
+                        if normalizar_texto(palabra) != normalizar_texto(previo_buscar):
+                            st.session_state.pop(f"select_{key_entrenamiento}", None)
+                            fila["_exact_on_load"] = False
                         fila["BuscarEjercicio"] = palabra
 
                         nombre_original = (fila.get("Ejercicio","") or "").strip()
@@ -892,6 +900,7 @@ def crear_rutinas():
                             "",
                             ejercicios_encontrados,
                             key=f"select_{key_entrenamiento}",
+                            index=0,
                             label_visibility="collapsed"
                         )
 
@@ -1050,16 +1059,41 @@ def crear_rutinas():
                                 index=(opciones_var.index(fila.get(variable_key, "")) if fila.get(variable_key, "") in opciones_var else 0),
                                 key=f"var{p}_{key_entrenamiento}_{idx}"
                             )
-                            fila[cantidad_key] = pcols[1].text_input(
-                                f"Cantidad {p}", value=fila.get(cantidad_key, ""), key=f"cant{p}_{key_entrenamiento}_{idx}"
-                            )
-                            fila[operacion_key] = pcols[2].selectbox(
+                            fila[operacion_key] = pcols[1].selectbox(
                                 f"Operación {p}", opciones_ope,
                                 index=(opciones_ope.index(fila.get(operacion_key, "")) if fila.get(operacion_key, "") in opciones_ope else 0),
                                 key=f"ope{p}_{key_entrenamiento}_{idx}"
                             )
+                            fila[cantidad_key] = pcols[2].text_input(
+                                f"Cantidad {p}", value=fila.get(cantidad_key, ""), key=f"cant{p}_{key_entrenamiento}_{idx}"
+                            )
                             fila[semanas_key] = pcols[3].text_input(
                                 f"Semanas {p}", value=fila.get(semanas_key, ""), key=f"sem{p}_{key_entrenamiento}_{idx}"
+                            )
+
+                            cond_cols = st.columns([1.2, 1.2, 1])
+                            cond_cols[0].markdown("<small>Condición</small>", unsafe_allow_html=True)
+                            cond_var_key = f"condvar{p}_{key_entrenamiento}_{idx}"
+                            cond_op_key = f"condop{p}_{key_entrenamiento}_{idx}"
+                            cond_val_key = f"condval{p}_{key_entrenamiento}_{idx}"
+                            opciones_cond_var = ["", "rir"]
+                            opciones_cond_op = ["", ">", "<", ">=", "<="]
+                            fila[f"CondicionVar_{p}"] = cond_cols[0].selectbox(
+                                "Variable condición",
+                                opciones_cond_var,
+                                index=(opciones_cond_var.index(fila.get(f"CondicionVar_{p}", "")) if fila.get(f"CondicionVar_{p}", "") in opciones_cond_var else 0),
+                                key=cond_var_key,
+                                label_visibility="collapsed"
+                            )
+                            fila[f"CondicionOp_{p}"] = cond_cols[1].selectbox(
+                                "Operador condición",
+                                opciones_cond_op,
+                                index=(opciones_cond_op.index(fila.get(f"CondicionOp_{p}", "")) if fila.get(f"CondicionOp_{p}", "") in opciones_cond_op else 0),
+                                key=cond_op_key,
+                                label_visibility="collapsed"
+                            )
+                            fila[f"CondicionValor_{p}"] = cond_cols[2].text_input(
+                                "", value=str(fila.get(f"CondicionValor_{p}", "") or ""), key=cond_val_key, label_visibility="collapsed"
                             )
 
                         # Copia entre días
@@ -1300,6 +1334,9 @@ def crear_rutinas():
                         base = dict(fila)
                         key_entrenamiento = f"{idx_dia}_{seccion.replace(' ', '_')}_{idx_fila}"
 
+                        buscar_key = f"buscar_{key_entrenamiento}"
+                        base["BuscarEjercicio"] = st.session_state.get(buscar_key, base.get("BuscarEjercicio", ""))
+
                         circuito_val = st.session_state.get(f"circ_{key_entrenamiento}")
                         if circuito_val is not None:
                             base["Circuito"] = circuito_val
@@ -1336,11 +1373,17 @@ def crear_rutinas():
                             cant_key = f"cant{p}_{key_entrenamiento}_{idx_fila}"
                             ope_key = f"ope{p}_{key_entrenamiento}_{idx_fila}"
                             sem_key = f"sem{p}_{key_entrenamiento}_{idx_fila}"
+                            cond_var_key = f"condvar{p}_{key_entrenamiento}_{idx_fila}"
+                            cond_op_key = f"condop{p}_{key_entrenamiento}_{idx_fila}"
+                            cond_val_key = f"condval{p}_{key_entrenamiento}_{idx_fila}"
                             if var_key in st.session_state:
                                 base[f"Variable_{p}"] = st.session_state.get(var_key, base.get(f"Variable_{p}", ""))
                                 base[f"Cantidad_{p}"] = st.session_state.get(cant_key, base.get(f"Cantidad_{p}", ""))
                                 base[f"Operacion_{p}"] = st.session_state.get(ope_key, base.get(f"Operacion_{p}", ""))
                                 base[f"Semanas_{p}"] = st.session_state.get(sem_key, base.get(f"Semanas_{p}", ""))
+                                base[f"CondicionVar_{p}"] = st.session_state.get(cond_var_key, base.get(f"CondicionVar_{p}", ""))
+                                base[f"CondicionOp_{p}"] = st.session_state.get(cond_op_key, base.get(f"CondicionOp_{p}", ""))
+                                base[f"CondicionValor_{p}"] = st.session_state.get(cond_val_key, base.get(f"CondicionValor_{p}", ""))
 
                         filas_actualizadas.append(base)
 
