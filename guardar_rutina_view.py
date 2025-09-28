@@ -73,6 +73,108 @@ def parsear_semanas(semanas_txt: str) -> list[int]:
     except:
         return []
 
+
+def _listar_ejercicios_de_dia(data):
+    if isinstance(data, list):
+        return [e for e in data if isinstance(e, dict)]
+    if isinstance(data, dict):
+        ejercicios = data.get("ejercicios")
+        if isinstance(ejercicios, list):
+            return [e for e in ejercicios if isinstance(e, dict)]
+        return [v for v in data.values() if isinstance(v, dict)]
+    return []
+
+
+def _ejercicio_clave(e: dict) -> tuple[str, str, str]:
+    nombre = _norm(e.get("ejercicio") or e.get("Ejercicio") or e.get("nombre") or "")
+    circuito = (_s(e.get("circuito") or e.get("Circuito") or "")).upper()
+    bloque = _norm(e.get("bloque") or e.get("Sección") or e.get("seccion") or "")
+    return (nombre, circuito, bloque)
+
+
+def _extraer_rir_valores(e: dict) -> list[float]:
+    valores: list[float] = []
+    series = e.get("series_data")
+    if isinstance(series, list):
+        for s in series:
+            if not isinstance(s, dict):
+                continue
+            val = _f(s.get("rir") or s.get("RIR"))
+            if val is not None:
+                valores.append(val)
+    for key in ("rir_alcanzado", "RirAlcanzado", "RIR_alcanzado"):
+        val = _f(e.get(key))
+        if val is not None:
+            valores.append(val)
+    return valores
+
+
+def _cargar_doc_semana(db, cache: dict, correo_norm: str, fecha_iso: str):
+    key = (correo_norm, fecha_iso)
+    if key not in cache:
+        doc_id = f"{correo_norm}_{fecha_iso.replace('-', '_')}"
+        snap = db.collection("rutinas_semanales").document(doc_id).get()
+        cache[key] = snap.to_dict() if snap.exists else None
+    return cache[key]
+
+
+def _condicion_rir_cumplida(db, cache, correo_norm: str, fecha_prev: str, numero_dia: int, ejercicio_ref: dict, operador: str, umbral: float) -> bool:
+    doc_prev = _cargar_doc_semana(db, cache, correo_norm, fecha_prev)
+    if not doc_prev:
+        return False
+    rutina_prev = doc_prev.get("rutina", {}) or {}
+    dia_data = rutina_prev.get(str(numero_dia))
+    if not dia_data:
+        return False
+
+    ejercicios_prev = _listar_ejercicios_de_dia(dia_data)
+    ref_clave = _ejercicio_clave(ejercicio_ref)
+
+    def _compare(valor: float) -> bool:
+        if operador == ">":
+            return valor > umbral
+        if operador == "<":
+            return valor < umbral
+        if operador == ">=":
+            return valor >= umbral
+        if operador == "<=":
+            return valor <= umbral
+        return False
+
+    for e_prev in ejercicios_prev:
+        if _ejercicio_clave(e_prev) != ref_clave:
+            continue
+
+        plan_peso = _f(e_prev.get("peso") or e_prev.get("Peso"))
+        series = e_prev.get("series_data") if isinstance(e_prev.get("series_data"), list) else []
+
+        encontro_condicion = False
+        salto_por_progresion = False
+
+        for serie in series:
+            if not isinstance(serie, dict):
+                continue
+            rir_val = _f(serie.get("rir") or serie.get("RIR"))
+            peso_val = _f(serie.get("peso") or serie.get("Peso"))
+
+            if rir_val is not None and _compare(rir_val):
+                encontro_condicion = True
+
+            if (
+                plan_peso is not None
+                and peso_val is not None
+                and peso_val > plan_peso
+                and (rir_val is None or not _compare(rir_val))
+            ):
+                salto_por_progresion = True
+
+        if salto_por_progresion:
+            return False
+        if encontro_condicion:
+            return True
+
+    return False
+
 # -------------------------
 # Progresión acumulativa
 # -------------------------
@@ -126,6 +228,8 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
     db = get_db()
     bloque_id = str(uuid.uuid4())
 
+    docs_prev_cache: dict[tuple[str, str], dict | None] = {}
+
     try:
         for semana_idx in range(int(semanas)):  # 0..(N-1)
             semana_actual = semana_idx + 1      # 1..N
@@ -157,6 +261,15 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                     for ejercicio in ejercicios:
                         if not _s(ejercicio.get("Ejercicio", "")):
                             continue
+
+                        ejercicio_ref = {
+                            "Ejercicio": ejercicio.get("Ejercicio", ""),
+                            "ejercicio": ejercicio.get("Ejercicio", ""),
+                            "Circuito": ejercicio.get("Circuito", ""),
+                            "circuito": ejercicio.get("Circuito", ""),
+                            "Sección": ejercicio.get("Sección", seccion),
+                            "bloque": ejercicio.get("Sección", seccion),
+                        }
 
                         # 1) Bases Semana 1
                         base_peso       = _f(ejercicio.get("Peso", ""))
@@ -207,13 +320,41 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                                 "cantidad": ejercicio.get(f"Cantidad_{p}", ""),
                                 "op": _s(ejercicio.get(f"Operacion_{p}", "")).lower(),
                                 "semanas": parsear_semanas(ejercicio.get(f"Semanas_{p}", "")),
+                                "cond_var": _s(ejercicio.get(f"CondicionVar_{p}", "")),
+                                "cond_op": _s(ejercicio.get(f"CondicionOp_{p}", "")),
+                                "cond_val": _f(ejercicio.get(f"CondicionValor_{p}", "")),
                             })
+
+                        fecha_prev_iso = (fecha_semana - timedelta(weeks=1)).strftime("%Y-%m-%d")
+
+                        def _regla_habilitada(regla) -> bool:
+                            cond_var = (regla.get("cond_var") or "").lower()
+                            cond_op = regla.get("cond_op")
+                            cond_val = regla.get("cond_val")
+                            if not cond_var or cond_op not in {">", "<", ">=", "<="} or cond_val in (None, ""):
+                                return True
+                            if semana_actual <= 1:
+                                return False
+                            if cond_var == "rir":
+                                return _condicion_rir_cumplida(
+                                    db,
+                                    docs_prev_cache,
+                                    correo_norm,
+                                    fecha_prev_iso,
+                                    numero_dia,
+                                    ejercicio_ref,
+                                    cond_op,
+                                    cond_val,
+                                )
+                            return True
 
                         def acum_scalar(nombre_var, base_val):
                             """Aplica progresión acumulativa para un escalar si hay una regla que lo afecta."""
                             val = base_val
                             for r in reglas:
                                 if r["var"] == nombre_var and r["cantidad"] not in (None, "") and r["op"]:
+                                    if not _regla_habilitada(r):
+                                        continue
                                     val = aplicar_acumulado_escalar(val, r["cantidad"], r["op"], r["semanas"], semana_actual)
                             return val
 
@@ -237,6 +378,8 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                         rir_min, rir_max = base_rir_min, base_rir_max
                         for r in reglas:
                             if r["var"] == "rir" and r["cantidad"] not in (None, "") and r["op"]:
+                                if not _regla_habilitada(r):
+                                    continue
                                 rir_min, rir_max = aplicar_acumulado_rango(
                                     rir_min, rir_max, r["cantidad"], r["op"], r["semanas"], semana_actual
                                 )
@@ -244,6 +387,8 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                         reps_min, reps_max = base_reps_min, base_reps_max
                         for r in reglas:
                             if r["var"] == "repeticiones" and r["cantidad"] not in (None, "") and r["op"]:
+                                if not _regla_habilitada(r):
+                                    continue
                                 reps_min, reps_max = aplicar_acumulado_rango(
                                     reps_min, reps_max, r["cantidad"], r["op"], r["semanas"], semana_actual
                                 )
