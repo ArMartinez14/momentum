@@ -4,7 +4,7 @@ from __future__ import annotations
 import streamlit as st
 from firebase_admin import firestore
 from datetime import datetime, timedelta, date
-import json, random, re, math
+import json, random, re, math, html
 from io import BytesIO
 import matplotlib.pyplot as plt
 import time
@@ -493,6 +493,8 @@ def _preparar_ejercicio_para_guardado(e: dict, correo_actor: str) -> dict:
     if rir_alc  is not None: e["rir_alcanzado"]  = rir_alc
     hay_input = any([(e.get("comentario","") or "").strip(), peso_alc is not None, reps_alc is not None, rir_alc is not None])
     if hay_input: e["coach_responsable"] = correo_actor
+    if "comentario" in e:
+        e["comentario"] = str(e.get("comentario", "")).strip()
     if "bloque" not in e: e["bloque"] = e.get("seccion","")
     return e
 
@@ -1100,6 +1102,16 @@ def ver_rutinas():
 
             # 3.b) Línea de detalles (incluye ahora también el RIR)
             st.markdown(f"<div class='muted' style='margin-top:2px;'>{info_str}</div>", unsafe_allow_html=True)
+
+            comentario_cliente = (e.get("comentario", "") or "").strip()
+            if comentario_cliente:
+                st.markdown(
+                    f"<div style='margin-top:6px; padding:10px 12px; border-left:3px solid var(--primary); background:rgba(15,23,42,0.35); border-radius:8px;'>"
+                    f"<div style='font-size:0.85rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;'>Comentario del deportista</div>"
+                    f"<div style='font-size:0.96rem; color:var(--text-main); margin-top:4px;'>{html.escape(comentario_cliente)}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
 
             # 3.c) Mostrar video embebido si está activo
             if video_url and st.session_state.get(mostrar_video_key, False):
