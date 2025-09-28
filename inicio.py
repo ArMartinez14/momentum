@@ -107,6 +107,65 @@ def _rutinas_asignadas_a_entrenador(_db, correo_entrenador: str):
         except: pass
     return out
 
+def _doc_id_from_mail(mail: str) -> str:
+    return mail.replace('@','_').replace('.','_')
+
+def _iter_ejercicios_en_doc(doc: dict):
+    rutina = doc.get("rutina") or {}
+    for dia_key, data_dia in rutina.items():
+        if not str(dia_key).isdigit():
+            continue
+        items = []
+        if isinstance(data_dia, list):
+            items = [e for e in data_dia if isinstance(e, dict)]
+        elif isinstance(data_dia, dict):
+            if isinstance(data_dia.get("ejercicios"), list):
+                items = [e for e in data_dia["ejercicios"] if isinstance(e, dict)]
+            else:
+                items = [e for e in data_dia.values() if isinstance(e, dict)]
+        for item in items:
+            yield item
+
+def _comentarios_recientes_por_cliente(rutinas: list[dict], ack_map: dict[str, str] | None = None) -> dict[str, dict]:
+    """Devuelve mapping correo_cliente -> {'cliente': str, 'fecha': str, 'comentarios': [str]} considerando la semana más reciente con comentarios no vistos."""
+    ack_map = ack_map or {}
+    resultado: dict[str, dict] = {}
+    for doc in rutinas:
+        cliente = (doc.get("cliente") or "").strip()
+        fecha = doc.get("fecha_lunes") or ""
+        correo_cliente = (doc.get("correo") or "").strip().lower()
+        if not cliente or not fecha:
+            continue
+        comentarios = []
+        for ejercicio in _iter_ejercicios_en_doc(doc):
+            comentario = (ejercicio.get("comentario") or "").strip()
+            if comentario:
+                comentarios.append(comentario)
+        if not comentarios:
+            continue
+        ack_fecha = ack_map.get(correo_cliente)
+        if ack_fecha and ack_fecha >= fecha:
+            continue
+        stored = resultado.get(correo_cliente)
+        if stored is None or fecha > stored.get("fecha", ""):
+            resultado[correo_cliente] = {
+                "cliente": cliente,
+                "fecha": fecha,
+                "comentarios": comentarios,
+            }
+    return resultado
+
+def _comentarios_ack_map(_db, correo_entrenador: str) -> dict[str, str]:
+    try:
+        doc_id = _doc_id_from_mail(correo_entrenador)
+        snap = _db.collection("comentarios_ack").document(doc_id).get()
+        data = snap.to_dict() if snap.exists else {}
+        if not isinstance(data, dict):
+            return {}
+        return {str(k).strip().lower(): str(v) for k, v in data.items() if isinstance(k, str) and v}
+    except Exception:
+        return {}
+
 def _dias_numericos(rutina_dict: dict) -> list[str]:
     if not isinstance(rutina_dict, dict): return []
     dias = [k for k in rutina_dict.keys() if str(k).isdigit()]
@@ -330,6 +389,17 @@ def inicio_deportista():
         if not asignadas:
             st.info("No tienes deportistas asignados aún.")
         else:
+            ack_map = _comentarios_ack_map(db, correo_raw)
+            comentarios_recientes = _comentarios_recientes_por_cliente(asignadas, ack_map)
+            if comentarios_recientes:
+                avisos = []
+                for correo_cli, payload in comentarios_recientes.items():
+                    cliente_nombre = payload.get("cliente") or correo_cli
+                    total = len(payload.get("comentarios", []))
+                    texto = "un comentario" if total == 1 else f"{total} comentarios"
+                    avisos.append(f"{cliente_nombre} dejó {texto}")
+                st.info("🗨️ " + " · ".join(avisos))
+
             # agrupar por correo de cliente
             por_cliente = defaultdict(list)
             for r in asignadas:
@@ -358,12 +428,34 @@ def inicio_deportista():
             cols = st.columns(2, gap="medium")
             for idx, (correo_cli, docs_cli, nombre_cli, sem_idx, sem_total, fecha_ult, _) in enumerate(ordenados):
                 with cols[idx % 2]:
+                    badge_html = ""
+                    info_comentario = comentarios_recientes.get(correo_cli)
+                    if info_comentario:
+                        total_c = len(info_comentario.get("comentarios", []))
+                        badge_html = (
+                            "<div style='margin-top:10px;'>"
+                            "<span style='display:inline-flex;align-items:center;padding:4px 12px;border-radius:14px;gap:6px;"
+                            "background:linear-gradient(135deg, rgba(59,130,246,0.18), rgba(37,99,235,0.2));"
+                            "color:#60a5fa;font-weight:600;font-size:0.82rem;'>"
+                            "💬 Comentarios recientes"
+                            f"<span style='background:rgba(59,130,246,0.28); color:#1d4ed8; border-radius:999px; padding:2px 8px; font-size:0.72rem;'>{total_c}</span>"
+                            "</span></div>"
+                        )
+                    fecha_badge = (
+                        f"<span style='display:inline-flex;align-items:center;padding:4px 12px;border-radius:12px;gap:8px;"
+                        "background:linear-gradient(135deg, rgba(34,197,94,0.18), rgba(16,185,129,0.22));"
+                        "color:#064e3b;font-weight:600;font-size:0.82rem;letter-spacing:0.01em;'>"
+                        "<span style='background:rgba(22,163,74,0.22);padding:2px 8px;border-radius:999px;font-size:0.7rem;color:#047857;'>Última rutina</span>"
+                        f"<span>🗓️ {fecha_ult or '—'}</span>"
+                        "</span>"
+                    )
                     st.markdown(
                         f"""
                         <div class="card">
                           <div style="font-weight:800; font-size:1.05rem;">{nombre_cli}</div>
                           <div class='muted' style='margin-top:6px;'>Bloque: Semana {sem_idx or '—'} de {sem_total or '—'}</div>
-                          <div class='muted'>Última semana de rutina: <code>{fecha_ult or '—'}</code></div>
+                          <div style='margin-top:8px;'>{fecha_badge}</div>
+                          {badge_html}
                         </div>
                         """,
                         unsafe_allow_html=True,
