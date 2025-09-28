@@ -1,623 +1,316 @@
-# seguimiento_entrenamiento.py
-from __future__ import annotations
-import json, re
-from datetime import datetime, timedelta, date
-
-import pandas as pd
+# reportes.py — Reportes + Resumen "Semana X de Y" por bloque
 import streamlit as st
+import firebase_admin
+from firebase_admin import credentials, firestore
+from datetime import datetime, timedelta, date
+import json, re
+import pandas as pd
+from collections import defaultdict
 
-from firebase_admin import firestore
-from app_core.firebase_client import get_db
-from app_core.theme import inject_theme
+DIAS_VALIDOS = {"1","2","3","4","5"}
 
-# =============================
-#  Estilos / Constantes
-# =============================
-inject_theme()
+def _doc_id_from_mail(mail: str) -> str:
+    return mail.replace('@','_').replace('.','_')
 
+def _comentarios_ack_map(_db, correo_entrenador: str) -> dict[str, str]:
+    try:
+        doc_id = _doc_id_from_mail(correo_entrenador)
+        snap = _db.collection("comentarios_ack").document(doc_id).get()
+        data = snap.to_dict() if snap.exists else {}
+        if not isinstance(data, dict):
+            return {}
+        return {str(k).strip().lower(): str(v) for k, v in data.items() if isinstance(k, str) and v}
+    except Exception:
+        return {}
 
-# =============================
-#  Helpers base
-# =============================
+# ---------- Utils ----------
+def init_firebase():
+    if not firebase_admin._apps:
+        cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred)
 
-def normalizar_id(correo: str) -> str:
-    return (correo or "").strip().lower()
+def lunes_actual() -> date:
+    hoy = datetime.now().date()
+    return hoy - timedelta(days=hoy.weekday())
 
-def safe_int(x, default=0):
-    try: return int(float(x))
-    except Exception: return default
+def es_no_vacio(v):
+    if v is None: return False
+    if isinstance(v, str): return v.strip() != ""
+    return True
 
-def safe_float(x, default=0.0):
-    try: return float(x)
-    except Exception: return default
+def parse_fecha_de_id(doc_id: str) -> str | None:
+    m = re.search(r"_(\d{4})_(\d{2})_(\d{2})$", doc_id)
+    if not m: return None
+    yyyy, mm, dd = m.groups()
+    try:
+        return date(int(yyyy), int(mm), int(dd)).isoformat()
+    except Exception:
+        return None
 
-def parse_reps_min(value) -> int | None:
-    """Extrae el mínimo de repeticiones desde formatos típicos."""
-    if value is None: return None
-    if isinstance(value, (int, float)):
-        try: return int(value)
-        except Exception: return None
-    if isinstance(value, dict):
-        for k in ("min","reps_min","rep_min","rmin"):
-            if k in value:
-                try: return int(value[k])
-                except Exception: pass
-        if "reps" in value:
-            return parse_reps_min(value["reps"])
-    s = str(value).strip().lower()
-    m = re.match(r"^\s*(\d+)\s*[x×]\s*\d+", s)
-    if m: return int(m.group(1))
-    m = re.match(r"^\s*(\d+)\s*[-–—]\s*(\d+)", s)
-    if m: return int(m.group(1))
-    m = re.match(r"^\s*(\d+)\s*$", s)
-    if m: return int(m.group(1))
-    return None
-
-def clasificar_categoria(reps_min: int | None) -> str:
-    """
-    Regla:
-      - reps_min < 6          -> Fuerza
-      - 6 <= reps_min < 12    -> Hipertrofia
-      - reps_min >= 12        -> Accesorio
-    """
-    if reps_min is None: return "Accesorio"
-    if reps_min < 6:     return "Fuerza"
-    if reps_min < 12:    return "Hipertrofia"
-    return "Accesorio"
-
-
-# =============================
-#  Lectura de datos (según tu esquema real)
-# =============================
-def listar_clientes_con_rutinas(db) -> list[str]:
-    """Correos únicos desde 'rutinas_semanales' (campo 'correo')."""
-    correos = set()
-    for doc in db.collection("rutinas_semanales").limit(1000).stream():
-        data = doc.to_dict() or {}
-        email = data.get("correo")
-        if email:
-            correos.add(normalizar_id(email))
-    return sorted(correos)
-
-def listar_evaluaciones_cliente(db, correo: str) -> list[dict]:
-    """Evals (si existen). Se muestran en los select; si no, se usa fecha manual."""
-    out = []
-    q = db.collection("evaluaciones").where("correo", "==", normalizar_id(correo))
-    for doc in q.stream():
-        d = doc.to_dict() or {}
-        f = d.get("fecha")
-        if isinstance(f, str):
-            try: d["_fecha_dt"] = datetime.fromisoformat(f)
-            except Exception: d["_fecha_dt"] = None
-        elif hasattr(f, "to_datetime"):
-            d["_fecha_dt"] = f.to_datetime()
-        elif isinstance(f, datetime):
-            d["_fecha_dt"] = f
-        else:
-            d["_fecha_dt"] = None
-        d["_id"] = doc.id
-        out.append(d)
-    out.sort(key=lambda x: x.get("_fecha_dt") or datetime.min)
-    return out
-
-def dia_finalizado(doc_dict: dict, dia_key: str) -> bool:
-    """
-    Día finalizado según tu app:
-      - doc["rutina"][f"{dia}_finalizado"] == True
-    (Se mantiene compatibilidad con mapas alternativos si existieran).
-    """
-    dia_key = str(dia_key)
-    rutina = doc_dict.get("rutina") or {}
-    flag_key = f"{dia_key}_finalizado"
-    if isinstance(rutina, dict) and flag_key in rutina:
-        return bool(rutina.get(flag_key) is True)
-
-    fin_map = doc_dict.get("finalizados")
-    if isinstance(fin_map, dict):
-        val = fin_map.get(dia_key)
-        if isinstance(val, bool):
-            return val
-
-    estado_map = doc_dict.get("estado_por_dia")
-    if isinstance(estado_map, dict):
-        val = str(estado_map.get(dia_key, "")).strip().lower()
-        if val in ("fin","final","finalizado","completado","done"):
-            return True
-
-    alt = doc_dict.get(f"dia_{dia_key}")
-    if isinstance(alt, dict) and "finalizado" in alt:
-        return bool(alt.get("finalizado"))
-
-    return False
-
-def obtener_lista_ejercicios(data_dia):
-    """
-    Normaliza el contenido del día a lista de ejercicios (dicts):
-      - lista directa de dicts
-      - dict con subclave 'ejercicios' (list/dict)
-      - dict con claves numéricas "1","2",...
-    """
-    if data_dia is None: return []
-    # Lista
-    if isinstance(data_dia, list):
-        if len(data_dia) == 1 and isinstance(data_dia[0], dict) and "ejercicios" in data_dia[0]:
-            return obtener_lista_ejercicios(data_dia[0]["ejercicios"])
-        return [e for e in data_dia if isinstance(e, dict)]
-    # Dict
-    if isinstance(data_dia, dict):
-        if "ejercicios" in data_dia:
-            ej = data_dia["ejercicios"]
-            if isinstance(ej, list):
-                return [e for e in ej if isinstance(e, dict)]
-            if isinstance(ej, dict):
-                try:
-                    pares = sorted(ej.items(), key=lambda kv: int(kv[0]))
-                    return [v for _, v in pares if isinstance(v, dict)]
-                except Exception:
-                    return [v for v in ej.values() if isinstance(v, dict)]
-            return []
-        claves_numericas = [k for k in data_dia.keys() if str(k).isdigit()]
-        if claves_numericas:
-            try:
-                pares = sorted(((k, data_dia[k]) for k in claves_numericas), key=lambda kv: int(kv[0]))
-                return [v for _, v in pares if isinstance(v, dict)]
-            except Exception:
-                return [data_dia[k] for k in data_dia if isinstance(data_dia[k], dict)]
-        return [v for v in data_dia.values() if isinstance(v, dict)]
-    return []
-
-def _iter_dias_rutina(doc_dict: dict):
-    """
-    Itera días desde doc['rutina'] (dict) y devuelve (dia_key, lista_ejercicios_del_dia).
-    Detecta días por claves numéricas "1","2",... y normaliza el día con obtener_lista_ejercicios().
-    """
-    r = doc_dict.get("rutina")
-    if not isinstance(r, dict):
-        return
-    dia_keys = [k for k in r.keys() if str(k).isdigit()]
-    dia_keys.sort(key=lambda x: int(x))
-    for dia_key in dia_keys:
-        ejercicios_raw = r.get(dia_key)
-        lista = obtener_lista_ejercicios(ejercicios_raw)
-        yield str(dia_key), lista
-
-def iter_ejercicios_en_rango(db, correo: str, desde: date, hasta: date,
-                             usar_real: bool, excluir_warmup: bool):
-    """
-    Estructura:
-      - 'correo' (string)
-      - 'fecha_lunes' (YYYY-MM-DD)
-      - 'rutina' = dict {"1":[...], "2":[...]}
-    REGLA:
-      - Teórico (usar_real=False): cuenta TODOS los días.
-      - Real    (usar_real=True):  SOLO días finalizados.
-    Switch:
-      - excluir_warmup: omite ejercicios cuyo bloque sea "Warm Up" (o seccion equivalente).
-    """
-    correo_norm = normalizar_id(correo)
-
-    docs = list(
-        db.collection("rutinas_semanales")
-          .where("correo", "==", correo_norm)
-          .stream()
-    )
-
-    for doc in docs:
-        data = doc.to_dict() or {}
-
-        # Fecha base de semana
-        fecha_semana = None
-        v = data.get("fecha_lunes") or data.get("semana_inicio") or data.get("fecha")
-        if isinstance(v, str):
-            try: fecha_semana = datetime.fromisoformat(v).date()
-            except Exception: fecha_semana = None
-        if not fecha_semana:
-            # Fallback por ID *_YYYY_MM_DD
-            try:
-                tail = "_".join(doc.id.split("_")[-3:])
-                fecha_semana = datetime.strptime(tail, "%Y_%m_%d").date()
-            except Exception:
-                continue
-
-        # Recorremos días
-        for dia_key, ejercicios in _iter_dias_rutina(data):
-            try: idx = int(dia_key) - 1
-            except Exception: idx = 0
-            fecha_dia = fecha_semana + timedelta(days=idx)
-
-            # Filtro por rango
-            if not (desde <= fecha_dia <= hasta):
-                continue
-
-            # Real = solo finalizados
-            if usar_real and (not dia_finalizado(data, dia_key)):
-                continue
-
-            if not isinstance(ejercicios, list):
-                continue
-
-            for ej in ejercicios:
-                if not isinstance(ej, dict):
-                    continue
-
-                # Excluir Warm Up (bloque/seccion)
-                if excluir_warmup:
-                    bloque = str(ej.get("bloque", ej.get("seccion", ""))).strip().lower()
-                    bloque_norm = bloque.replace("-", " ").replace("_", " ")
-                    if bloque_norm == "warm up":
-                        continue
-
-                series   = safe_int(ej.get("series", 0), 0)
-                reps_min = parse_reps_min(ej.get("reps_min", ej.get("reps")))
-                reps_min = safe_int(reps_min or 0, 0)
-                peso_plan = safe_float(ej.get("peso", 0), 0.0)
-                peso_alc  = safe_float(
-                    ej.get("peso_alcanzado")
-                    or ej.get("Peso_alcanzado")
-                    or ej.get("PesoAlcanzado"),
-                    0.0,
-                )
-
-                yield {
-                    "fecha": fecha_dia,
-                    "ejercicio": ej.get("ejercicio"),
-                    "series": series,
-                    "reps_min": reps_min,
-                    "peso": peso_plan,
-                    "peso_alcanzado": peso_alc,
-                }
-
-
-# =============================
-#  Agregaciones (tablas)
-# =============================
-def agrupar_por_semana(ej_list: list[dict]) -> pd.DataFrame:
-    """Devuelve DF con columnas: semana, categoria, series, volumen, tonelaje."""
-    rows = []
-    for ej in ej_list:
-        reps_min = ej.get("reps_min") or 0
-        categoria = clasificar_categoria(reps_min)
-        series = safe_int(ej.get("series"), 0)
-        peso = safe_float(ej.get("peso"), 0.0)
-        volumen = series * reps_min
-        tonelaje = volumen * peso
-
-        f: date = ej["fecha"]
-        lunes = f - timedelta(days=f.weekday())
-
-        rows.append({
-            "semana": lunes,
-            "categoria": categoria,
-            "series": series,
-            "volumen": volumen,
-            "tonelaje": tonelaje
+def filas_series_data(cliente, dia_label, ejercicio_nombre, series_data, comentario=""):
+    filas = []
+    comentario = (comentario or "").strip()
+    tiene_series = False
+    if not isinstance(series_data, list): return filas
+    for idx, s in enumerate(series_data):
+        if isinstance(s, dict) and any(es_no_vacio(v) for v in s.values()):
+            fila = {"cliente": cliente, "día": dia_label, "ejercicio": ejercicio_nombre, "serie": idx + 1}
+            for k, v in s.items():
+                fila[str(k)] = v
+            if comentario:
+                fila["comentario"] = comentario
+            filas.append(fila)
+            tiene_series = True
+    if comentario and not tiene_series:
+        filas.append({
+            "cliente": cliente,
+            "día": dia_label,
+            "ejercicio": ejercicio_nombre,
+            "serie": "-",
+            "comentario": comentario,
         })
+    return filas
 
-    if not rows:
-        return pd.DataFrame(columns=["semana", "categoria", "series", "volumen", "tonelaje"])
+# ---------- Vista ----------
+def ver_reportes():
+    st.title("📊 Reportes de Sesión (agrupados)")
 
-    df = pd.DataFrame(rows)
-    df = df.groupby(["semana", "categoria"], as_index=False).sum(numeric_only=True)
-    df = df.sort_values(["semana", "categoria"])
-    return df
+    init_firebase()
+    db = firestore.client()
 
-def resumen_semanal(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Retorna (df_totales, df_promedio_por_categoria)."""
-    if df.empty:
-        empty_cols = ["categoria", "series", "volumen", "tonelaje"]
-        return (pd.DataFrame(columns=["semana"] + empty_cols),
-                pd.DataFrame(columns=empty_cols))
-    df_totales = df.copy()
-    semanas_count = df["semana"].nunique()
-    df_prom = (df.groupby("categoria", as_index=False)[["series","volumen","tonelaje"]]
-                 .sum(numeric_only=True))
-    if semanas_count > 0:
-        df_prom[["series","volumen","tonelaje"]] = df_prom[["series","volumen","tonelaje"]] / semanas_count
-    df_prom = df_prom.sort_values("categoria")
-    return df_totales, df_prom
+    correo_entrenador = st.session_state.get("correo", "").strip().lower()
+    if not correo_entrenador:
+        st.warning("Debes iniciar sesión para ver los reportes.")
+        return
 
+    # Filtros
+    fecha_lunes = st.date_input("Semana (selecciona el lunes)", value=lunes_actual())
+    c1, c2, c3 = st.columns(3)
+    with c1: filtro_cliente = st.text_input("Filtrar por cliente (opcional)")
+    with c2: filtro_ejercicio = st.text_input("Filtrar por ejercicio (opcional)")
+    with c3: solo_con_datos = st.checkbox("Solo ejercicios con datos en series", value=True)
 
-# =============================
-#  Diagnóstico
-# =============================
-def diagnosticar_estructura(db, correo: str, desde: date, hasta: date,
-                             usar_real: bool, excluir_warmup: bool):
-    correo_norm = normalizar_id(correo)
-    rows = []
+    st.caption("Cargando datos…")
 
-    docs = list(db.collection("rutinas_semanales")
-                  .where("correo", "==", correo_norm).stream())
+    col = db.collection("rutinas_semanales")
+    try:
+        docs = list(
+            col.where("entrenador", "==", correo_entrenador)
+               .where("fecha_lunes", "==", fecha_lunes.isoformat())
+               .stream()
+        )
+    except Exception:
+        try:
+            docs = list(col.where("fecha_lunes", "==", fecha_lunes.isoformat()).stream())
+        except Exception:
+            docs = list(col.limit(300).stream())
+
+    ack_map = _comentarios_ack_map(db, correo_entrenador)
+
+    # =========================
+    # 1) RESUMEN: "Semana X de Y" por bloque (para esta semana)
+    # =========================
+    avances = []  # [(cliente, semana_idx, total, bloque_id)]
+    # preparar pares únicos (correo_cliente, bloque_id) para minimizar lecturas
+    pares = []  # [(correo_cliente, bloque_id, cliente_nombre)]
+    for d in docs:
+        if not d.exists: continue
+        doc = d.to_dict() or {}
+        if (doc.get("entrenador","").strip().lower() != correo_entrenador): 
+            continue
+        cliente_nombre = doc.get("cliente") or doc.get("nombre") or "(sin nombre)"
+        correo_cliente = doc.get("correo") or ""  # correo del deportista
+        bloque_id = doc.get("bloque_rutina")
+        if not correo_cliente or not bloque_id: 
+            continue
+        pares.append((correo_cliente, str(bloque_id), cliente_nombre))
+
+    # quitar duplicados
+    pares_unicos = {}
+    for c_mail, b_id, c_nombre in pares:
+        pares_unicos[(c_mail, b_id)] = c_nombre  # conserva último nombre
+
+    # cache de fechas por (correo_cliente, bloque_id)
+    fechas_por_bloque = {}
+    for (c_mail, b_id), c_nombre in pares_unicos.items():
+        q = (
+            col.where("correo", "==", c_mail)
+               .where("bloque_rutina", "==", b_id)
+        )
+        semanas_bloque = list(q.stream())
+        fechas = []
+        for r in semanas_bloque:
+            dct = r.to_dict() or {}
+            f = dct.get("fecha_lunes") or parse_fecha_de_id(r.id)
+            if f: fechas.append(f)
+        fechas = sorted(set(fechas))
+        fechas_por_bloque[(c_mail, b_id)] = fechas
+
+    # construir avance por cada doc de esta semana
+    for d in docs:
+        if not d.exists: continue
+        doc = d.to_dict() or {}
+        if (doc.get("entrenador","").strip().lower() != correo_entrenador): 
+            continue
+        cliente_nombre = doc.get("cliente") or doc.get("nombre") or "(sin nombre)"
+        correo_cliente = doc.get("correo") or ""
+        bloque_id = doc.get("bloque_rutina")
+        if not correo_cliente or not bloque_id:
+            continue
+        fechas = fechas_por_bloque.get((correo_cliente, str(bloque_id)), [])
+        try:
+            semana_idx = fechas.index(fecha_lunes.isoformat()) + 1
+            total = len(fechas)
+            avances.append((cliente_nombre, semana_idx, total, str(bloque_id)))
+        except ValueError:
+            # semana no encontrada en ese bloque (puede ser otra semana cargada manualmente)
+            avances.append((cliente_nombre, None, len(fechas), str(bloque_id)))
+
+    if avances:
+        st.subheader("🧭 Resumen de avance de bloque (semana seleccionada)")
+        # ordenar por nombre
+        avances = sorted(avances, key=lambda x: x[0].lower())
+        for nombre, idx, total, b in avances:
+            if idx is None or total == 0:
+                st.markdown(f"- **{nombre}** — bloque `{b}` (sin posición para esta semana)")
+            else:
+                st.markdown(f"- **{nombre}** — Semana **{idx}** de **{total}** (bloque `{b}`)")
+        st.divider()
+
+    # =========================
+    # 2) REPORTE AGRUPADO Cliente -> Día (series_data + RPE)
+    # =========================
+    filas_series, filas_rpe = [], []
+
+    comentarios_vistos = dict(ack_map)
 
     for d in docs:
-        data = d.to_dict() or {}
+        if not d.exists: continue
+        doc = d.to_dict() or {}
 
-        # Fecha semana
-        fecha_semana = None
-        v = data.get("fecha_lunes") or data.get("semana_inicio") or data.get("fecha")
-        if isinstance(v, str):
-            try: fecha_semana = datetime.fromisoformat(v).date()
-            except Exception: pass
-        if not fecha_semana:
-            try:
-                tail = "_".join(d.id.split("_")[-3:])
-                fecha_semana = datetime.strptime(tail, "%Y_%m_%d").date()
-            except Exception:
-                pass
-
-        rutina = data.get("rutina")
-        if not isinstance(rutina, dict):
-            rows.append({"doc_id": d.id, "comentario": "Sin 'rutina' dict"})
+        # seguridad por si el query no filtró
+        if (doc.get("entrenador","").strip().lower() != correo_entrenador):
+            continue
+        if (doc.get("fecha_lunes") or parse_fecha_de_id(d.id)) != fecha_lunes.isoformat():
             continue
 
-        dia_keys = [k for k in rutina.keys() if str(k).isdigit()]
-        dia_keys.sort(key=lambda x: int(x) if str(x).isdigit() else 999)
+        cliente = doc.get("cliente") or doc.get("nombre") or "(sin nombre)"
+        rutina = doc.get("rutina", {}) or {}
+        correo_cliente = (doc.get("correo") or "").strip().lower()
+        fecha_iso = fecha_lunes.isoformat()
 
-        for dia_key in dia_keys:
-            try: idx = int(dia_key) - 1
-            except Exception: idx = 0
-            fecha_dia = fecha_semana + timedelta(days=idx) if fecha_semana else None
+        for dia_key, dia_node in rutina.items():
+            if str(dia_key) not in DIAS_VALIDOS:
+                continue
+            dia_label = f"Día {dia_key}"
 
-            en_rango = bool(fecha_dia and (desde <= fecha_dia <= hasta))
-            fin = dia_finalizado(data, dia_key)
-            motivo = "OK"
-            if not en_rango:
-                motivo = "Fuera de rango"
-            elif usar_real and not fin:
-                motivo = "No finalizado (modo REAL)"
+            # A) día = objeto {ejercicios:[...], rpe: X}
+            if isinstance(dia_node, dict):
+                if "rpe" in dia_node and es_no_vacio(dia_node.get("rpe")):
+                    filas_rpe.append({"cliente": cliente, "día": dia_label, "rpe": dia_node.get("rpe")})
 
-            ejercicios = obtener_lista_ejercicios(rutina.get(dia_key))
-            # Conteos robustos (saltando no-dicts)
-            n_total = sum(1 for e in ejercicios if isinstance(e, dict))
-            if excluir_warmup:
-                n_post = sum(
-                    1
-                    for e in ejercicios
-                    if isinstance(e, dict)
-                    and str(e.get("bloque", e.get("seccion", ""))).strip().lower().replace("-", " ").replace("_", " ") != "warm up"
-                )
-            else:
-                n_post = n_total
+                ejercicios = dia_node.get("ejercicios", [])
+                if isinstance(ejercicios, list):
+                    for ej in ejercicios:
+                        if not isinstance(ej, dict): 
+                            continue
+                        nombre_ej = ej.get("ejercicio") or ej.get("nombre") or ej.get("id_ejercicio") or "(sin nombre)"
+                        if filtro_ejercicio and filtro_ejercicio.lower() not in str(nombre_ej).lower():
+                            continue
+                        series_data = ej.get("series_data", [])
+                        comentario = (ej.get("comentario") or "").strip()
+                        if comentario and correo_cliente:
+                            prev = comentarios_vistos.get(correo_cliente)
+                            if prev is None or fecha_iso > prev:
+                                comentarios_vistos[correo_cliente] = fecha_iso
+                        if solo_con_datos:
+                            tiene_datos = any(isinstance(s, dict) and any(es_no_vacio(v) for v in s.values()) for s in series_data)
+                            if not tiene_datos and not comentario:
+                                continue
+                        filas_series.extend(filas_series_data(cliente, dia_label, nombre_ej, series_data, comentario=comentario))
 
-            rows.append({
-                "doc_id": d.id,
-                "fecha_semana": (fecha_semana.isoformat() if fecha_semana else None),
-                "dia": dia_key,
-                "fecha_dia": (fecha_dia.isoformat() if fecha_dia else None),
-                "finalizado": fin,
-                "en_rango": en_rango,
-                "n_ejercicios_total(dicts)": n_total,
-                "n_ejercicios_despues_filtro(dicts)": n_post,
-                "incluido?": (motivo == "OK"),
-                "motivo": motivo,
-            })
+            # B) día = lista de ejercicios
+            elif isinstance(dia_node, list):
+                # rpe como rpe_1 / rpe1 a nivel de rutina
+                for rk in (f"rpe_{dia_key}", f"rpe{dia_key}"):
+                    if rk in rutina and es_no_vacio(rutina.get(rk)):
+                        filas_rpe.append({"cliente": cliente, "día": dia_label, "rpe": rutina.get(rk)})
+                        break
 
-    df = pd.DataFrame(rows)
-    if df.empty:
-        st.warning("No se encontraron documentos para ese correo.")
-    else:
-        st.dataframe(df, use_container_width=True)
+                for ej in dia_node:
+                    if not isinstance(ej, dict): 
+                        continue
+                    nombre_ej = ej.get("ejercicio") or ej.get("nombre") or ej.get("id_ejercicio") or "(sin nombre)"
+                    if filtro_ejercicio and filtro_ejercicio.lower() not in str(nombre_ej).lower():
+                        continue
+                    series_data = ej.get("series_data", [])
+                    comentario = (ej.get("comentario") or "").strip()
+                    if comentario and correo_cliente:
+                        prev = comentarios_vistos.get(correo_cliente)
+                        if prev is None or fecha_iso > prev:
+                            comentarios_vistos[correo_cliente] = fecha_iso
+                    if solo_con_datos:
+                        tiene_datos = any(isinstance(s, dict) and any(es_no_vacio(v) for v in s.values()) for s in series_data)
+                        if not tiene_datos and not comentario:
+                            continue
+                    filas_series.extend(filas_series_data(cliente, dia_label, nombre_ej, series_data, comentario=comentario))
 
+    if comentarios_vistos:
+        try:
+            ack_doc = db.collection("comentarios_ack").document(_doc_id_from_mail(correo_entrenador))
+            ack_doc.set(comentarios_vistos, merge=True)
+        except Exception:
+            pass
 
-# =============================
-#  UI principal (solo muestra; no guarda)
-# =============================
-def app():
+    if filtro_cliente:
+        f = filtro_cliente.strip().lower()
+        filas_series = [x for x in filas_series if f in str(x.get("cliente","")).lower()]
+        filas_rpe    = [x for x in filas_rpe    if f in str(x.get("cliente","")).lower()]
 
-    db = get_db()
+    # ------- Vista agrupada Cliente -> Día -------
+    st.subheader("🧩 Reporte agrupado por Cliente y Día")
 
-    # ---------- Controles ----------
-    st.markdown("### Configuración")
-
-    colA, colB, colC = st.columns([1, 1, 1])
-    with colA:
-        clientes = listar_clientes_con_rutinas(db)
-        correo_sel = st.selectbox("Cliente (correo)", options=clientes, index=0 if clientes else None)
-
-    with colB:
-        usar_real = st.toggle("Usar **Real (solo días finalizados)**", value=False)
-
-    with colC:
-        excluir_warmup = st.toggle("Excluir **Warm Up**", value=True,
-                                   help="Si está activo, no contabiliza ejercicios cuyo bloque/sección sea Warm Up.")
-
-    vista_opciones = ["Resumen general", "Ejercicio específico"]
-    modo_vista = st.radio(
-        "Modo de análisis",
-        vista_opciones,
-        index=st.session_state.get("_seg_modo_vista", 0),
-        horizontal=True,
-        key="_seg_radio_modo"
-    )
-    st.session_state["_seg_modo_vista"] = vista_opciones.index(modo_vista)
-
-    colD, colE = st.columns(2)
-    with colD:
-        evals = listar_evaluaciones_cliente(db, correo_sel) if correo_sel else []
-        nombres_eval = [f"{(e.get('_fecha_dt') or datetime.min).date()} — {e.get('nombre','Evaluación')}" for e in evals]
-        e1 = st.selectbox("Evaluación inicial", options=["(usar fecha manual)"] + nombres_eval, index=0)
-    with colE:
-        e2 = st.selectbox("Evaluación final", options=["(usar fecha manual)"] + nombres_eval, index=0)
-
-    def _fecha_from_eval_label(lbl: str) -> date | None:
-        try: return datetime.fromisoformat(lbl.split(" — ")[0].strip()).date()
-        except Exception: return None
-
-    hoy = date.today()
-    colF, colG = st.columns(2)
-    with colF:
-        fecha_ini = st.date_input("Desde (incl.)", value=hoy - timedelta(days=28))
-    with colG:
-        fecha_fin = st.date_input("Hasta (incl.)", value=hoy)
-
-    if e1 != "(usar fecha manual)":
-        f = _fecha_from_eval_label(e1)
-        if f: fecha_ini = f
-    if e2 != "(usar fecha manual)":
-        f = _fecha_from_eval_label(e2)
-        if f: fecha_fin = f
-
-    # ---------- Diagnóstico ----------
-    with st.expander("🔎 Diagnóstico de búsqueda"):
-        st.caption("Muestra qué días/ejercicios entra según tu selección.")
-        if st.button("Ejecutar diagnóstico", use_container_width=True):
-            diagnosticar_estructura(db, correo_sel, fecha_ini, fecha_fin, usar_real, excluir_warmup)
-
-    st.divider()
-
-    # ---------- Ejecutar (solo visual) ----------
-    disabled = (not correo_sel) or (fecha_ini is None) or (fecha_fin is None) or (fecha_ini > fecha_fin)
-    if st.button("Calcular seguimiento", type="primary", disabled=disabled, use_container_width=True):
-        with st.spinner("Calculando…"):
-            ejercicios = list(iter_ejercicios_en_rango(
-                db, correo_sel, fecha_ini, fecha_fin,
-                usar_real=usar_real, excluir_warmup=excluir_warmup
-            ))
-            df_raw = pd.DataFrame(ejercicios)
-            if not df_raw.empty:
-                df_raw["peso"] = df_raw["peso"].apply(lambda x: safe_float(x, 0.0))
-                if "peso_alcanzado" in df_raw.columns:
-                    df_raw["peso_alcanzado"] = df_raw["peso_alcanzado"].apply(lambda x: safe_float(x, 0.0))
-                else:
-                    df_raw["peso_alcanzado"] = 0.0
-                df_raw["fecha"] = pd.to_datetime(df_raw["fecha"]).dt.date
-            df = agrupar_por_semana(ejercicios)
-            df_totales, df_prom = resumen_semanal(df)
-
-        st.session_state["_seg_df_raw"] = df_raw
-        st.session_state["_seg_df_totales"] = df_totales
-        st.session_state["_seg_df_prom"] = df_prom
-        st.session_state["_seg_modo_vista_last"] = modo_vista
-
-    df_raw = st.session_state.get("_seg_df_raw", pd.DataFrame())
-    df_totales = st.session_state.get("_seg_df_totales", pd.DataFrame())
-    df_prom = st.session_state.get("_seg_df_prom", pd.DataFrame())
-    modo_vista_last = st.session_state.get("_seg_modo_vista_last", modo_vista)
-
-    if df_raw.empty:
-        st.info("Carga un cálculo para ver resultados.")
+    if not filas_series and not filas_rpe:
+        st.info("No hay registros para los filtros seleccionados.")
         return
 
-    st.success("✅ Resumen generado (solo visual, no se guarda).")
-    import matplotlib.pyplot as plt
+    rpe_map = {(row["cliente"], row["día"]): row["rpe"] for row in filas_rpe}
 
-    if modo_vista == "Resumen general" or modo_vista_last == "Resumen general":
-        if modo_vista != "Resumen general":
-            st.info("El resumen general se calculó, cambia a ese modo si quieres verlo.")
+    grupos = defaultdict(lambda: defaultdict(list))
+    all_cols_dyn = set()
+    for row in filas_series:
+        cliente = row["cliente"]; dia = row["día"]
+        grupos[cliente][dia].append(row)
+        for k in row.keys():
+            if k not in {"cliente","día","ejercicio","serie"}:
+                all_cols_dyn.add(k)
 
-    if modo_vista == "Resumen general":
-        st.markdown("### Totales por **Semana × Categoría**")
-        st.dataframe(df_totales, use_container_width=True)
+    clientes_orden = sorted(grupos.keys())
+    base_cols = ["ejercicio","serie"] + sorted(all_cols_dyn)
 
-        st.markdown("### Promedio **semanal** por Categoría")
-        st.dataframe(df_prom, use_container_width=True)
+    for cliente in clientes_orden:
+        st.markdown(f"### 👤 {cliente}")
+        dias_orden = sorted(grupos[cliente].keys(), key=lambda x: int(x.split()[-1]))
+        for dia in dias_orden:
+            st.markdown(f"**{dia}**")
+            rows = grupos[cliente][dia]
+            df = pd.DataFrame(rows)
+            cols_presentes = [c for c in base_cols if c in df.columns]
+            df_show = df[["ejercicio","serie"] + [c for c in cols_presentes if c not in {"ejercicio","serie"}]]
+            df_show = df_show.sort_values(["ejercicio","serie"], kind="stable")
+            st.dataframe(df_show, use_container_width=True)
 
-        # --- Tonelaje: área apilada ---
-        st.markdown("#### Tonelaje por semana (área apilada)")
-        pivot_ton = df_totales.pivot_table(index="semana", columns="categoria",
-                                        values="tonelaje", aggfunc="sum").fillna(0)
-        fig1, ax1 = plt.subplots()
-        pivot_ton.plot(kind="area", stacked=True, ax=ax1, alpha=0.7)
-        ax1.set_xlabel("Semana"); ax1.set_ylabel("Tonelaje (kg)")
-        ax1.set_title("Tonelaje total acumulado")
-        st.pyplot(fig1)
+            rpe_val = rpe_map.get((cliente, dia))
+            if rpe_val is not None and es_no_vacio(rpe_val):
+                st.markdown(f"**RPE de la sesión:** `{rpe_val}`")
+            st.divider()
 
-        # --- Volumen: líneas comparativas ---
-        st.markdown("#### Volumen por semana (líneas)")
-        pivot_vol = df_totales.pivot_table(index="semana", columns="categoria",
-                                        values="volumen", aggfunc="sum").fillna(0)
-        fig2, ax2 = plt.subplots()
-        pivot_vol.plot(ax=ax2, marker="o")
-        ax2.set_xlabel("Semana"); ax2.set_ylabel("Volumen (series × reps)")
-        ax2.set_title("Evolución del volumen por categoría")
-        st.pyplot(fig2)
-
-        # --- Series: barras agrupadas ---
-        st.markdown("#### Series por semana (barras agrupadas)")
-        pivot_ser = df_totales.pivot_table(index="semana", columns="categoria",
-                                        values="series", aggfunc="sum").fillna(0)
-        fig3, ax3 = plt.subplots()
-        pivot_ser.plot(kind="bar", ax=ax3)
-        ax3.set_xlabel("Semana"); ax3.set_ylabel("Series")
-        ax3.set_title("Series por semana y categoría")
-        st.pyplot(fig3)
-
-        # --- Distribución porcentual promedio ---
-        st.markdown("#### Distribución porcentual promedio (torta)")
-        fig4, ax4 = plt.subplots()
-        df_prom.set_index("categoria")["series"].plot(
-            kind="pie", ax=ax4, autopct="%1.1f%%", startangle=90
+    # Descarga CSV plano
+    if filas_series:
+        st.download_button(
+            "⬇️ Descargar CSV (series_data plano)",
+            data=pd.DataFrame(filas_series).to_csv(index=False).encode("utf-8"),
+            file_name=f"reportes_series_{fecha_lunes.isoformat()}.csv",
+            mime="text/csv",
         )
-        ax4.set_ylabel("")
-        ax4.set_title("Proporción de series por categoría (promedio)")
-        st.pyplot(fig4)
-
-        # --- Volumen vs Intensidad ---
-        st.markdown("#### Volumen vs Intensidad (comparación en una misma escala)")
-        vol_semana = df_totales.groupby("semana", as_index=True)["volumen"].sum().sort_index()
-        ton_semana = df_totales.groupby("semana", as_index=True)["tonelaje"].sum().sort_index()
-        int_semana = ton_semana / vol_semana.replace(0, pd.NA)
-        df_norm = pd.DataFrame({
-            "Volumen (reps totales)": vol_semana,
-            "Intensidad media (kg/rep)": int_semana
-        })
-        df_norm = df_norm / df_norm.max()
-        fig, ax = plt.subplots()
-        df_norm.plot(ax=ax, marker="o")
-        ax.set_title("Volumen vs Intensidad (normalizado)")
-        ax.set_xlabel("Semana")
-        ax.set_ylabel("Valor normalizado (0–1)")
-        ax.legend(loc="best")
-        st.pyplot(fig)
-        st.caption("👉 Los valores están normalizados para comparar tendencias; no representan cantidades absolutas.")
-
-    if modo_vista == "Ejercicio específico":
-        opciones_ej = sorted(set(str(e).strip() for e in df_raw["ejercicio"].dropna()))
-        if not opciones_ej:
-            st.warning("No se encontraron nombres de ejercicio para este rango.")
-            return
-        if "_seg_select_ejercicio" not in st.session_state or st.session_state["_seg_select_ejercicio"] not in opciones_ej:
-            st.session_state["_seg_select_ejercicio"] = opciones_ej[0]
-        ejercicio_sel = st.selectbox(
-            "Ejercicio",
-            opciones_ej,
-            key="_seg_select_ejercicio"
-        )
-        df_ej = df_raw[df_raw["ejercicio"] == ejercicio_sel].copy()
-        df_ej["peso_util"] = df_ej.apply(
-            lambda row: row["peso_alcanzado"] if safe_float(row.get("peso_alcanzado"), 0.0) > 0 else row["peso"],
-            axis=1,
-        )
-        df_ej = df_ej[df_ej["peso_util"].apply(lambda x: safe_float(x, 0.0) > 0)]
-
-        if df_ej.empty:
-            st.info("Ese ejercicio no tiene registros de peso en el rango seleccionado.")
-            return
-
-        df_ej["semana"] = df_ej["fecha"].apply(lambda f: f - timedelta(days=f.weekday()))
-        df_sem = df_ej.groupby("semana", as_index=False)["peso_util"].max().sort_values("semana")
-
-        st.markdown(f"### 📈 Progresión de peso — {ejercicio_sel}")
-        fig_ej, ax_ej = plt.subplots()
-        ax_ej.plot(df_sem["semana"], df_sem["peso_util"], marker="o", color="#0ea5e9")
-        ax_ej.set_xlabel("Semana")
-        ax_ej.set_ylabel("Peso máximo reportado (kg)")
-        ax_ej.set_title("Evolución del peso planificado/registrado")
-        ax_ej.grid(alpha=0.2)
-        st.pyplot(fig_ej)
-
-        st.markdown("#### Detalle de registros")
-        st.dataframe(
-            df_ej.sort_values("fecha")[["fecha", "series", "reps_min", "peso", "peso_alcanzado", "peso_util"]].rename(columns={
-                "fecha": "Fecha",
-                "series": "Series",
-                "reps_min": "Reps mín",
-                "peso": "Peso plan (kg)",
-                "peso_alcanzado": "Peso alcanzado (kg)",
-                "peso_util": "Peso usado en gráfico (kg)"
-            }),
-            use_container_width=True,
-        )
-
-# Ejecutable standalone (opcional)
-if __name__ == "__main__":
-    app()
