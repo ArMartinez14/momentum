@@ -21,7 +21,9 @@ def _puede_editar_video(row: dict) -> bool:
     if _es_admin():
         return True
     creador = (row.get("entrenador") or row.get("creado_por") or "").strip().lower()
-    return creador and creador == _correo_user()
+    if creador and creador == _correo_user():
+        return True
+    return bool(row.get("publico"))
 
 def _es_url_valida(url: str) -> bool:
     """Valida http(s) y que el dominio sea YouTube."""
