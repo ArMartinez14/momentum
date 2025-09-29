@@ -44,165 +44,56 @@ def filas_series_data(cliente, dia_label, ejercicio_nombre, series_data):
                 fila[str(k)] = v
             filas.append(fila)
     return filas
-
+        })
+    return filas
+def normalizar_ejercicios(node):
+    if node is None:
+        return []
+    if isinstance(node, list):
+        if len(node) == 1 and isinstance(node[0], dict) and "ejercicios" in node[0]:
+            return normalizar_ejercicios(node[0]["ejercicios"])
+        return [e for e in node if isinstance(e, dict)]
+    if isinstance(node, dict):
+        if "ejercicios" in node:
+            return normalizar_ejercicios(node.get("ejercicios"))
+        claves_numericas = [k for k in node.keys() if str(k).isdigit()]
+        if claves_numericas:
+            try:
+                claves_numericas.sort(key=lambda x: int(x))
+                return [node[k] for k in claves_numericas if isinstance(node[k], dict)]
+            except Exception:
+                return [node[k] for k in node if isinstance(node[k], dict)]
+        return [v for v in node.values() if isinstance(v, dict)]
+    return []
 # ---------- Vista ----------
 def ver_reportes():
     st.title("📊 Reportes de Sesión (agrupados)")
-
-    init_firebase()
-    db = firestore.client()
-
-    correo_entrenador = st.session_state.get("correo", "").strip().lower()
-    if not correo_entrenador:
-        st.warning("Debes iniciar sesión para ver los reportes.")
-        return
-
-    # Filtros
-    fecha_lunes = st.date_input("Semana (selecciona el lunes)", value=lunes_actual())
-    c1, c2, c3 = st.columns(3)
-    with c1: filtro_cliente = st.text_input("Filtrar por cliente (opcional)")
-    with c2: filtro_ejercicio = st.text_input("Filtrar por ejercicio (opcional)")
-    with c3: solo_con_datos = st.checkbox("Solo ejercicios con datos en series", value=True)
-
-    st.caption("Cargando datos…")
-
-    col = db.collection("rutinas_semanales")
-    try:
-        docs = list(
-            col.where("entrenador", "==", correo_entrenador)
-               .where("fecha_lunes", "==", fecha_lunes.isoformat())
-               .stream()
-        )
-    except Exception:
-        try:
-            docs = list(col.where("fecha_lunes", "==", fecha_lunes.isoformat()).stream())
-        except Exception:
-            docs = list(col.limit(300).stream())
-
-    # =========================
-    # 1) RESUMEN: "Semana X de Y" por bloque (para esta semana)
-    # =========================
-    avances = []  # [(cliente, semana_idx, total, bloque_id)]
-    # preparar pares únicos (correo_cliente, bloque_id) para minimizar lecturas
-    pares = []  # [(correo_cliente, bloque_id, cliente_nombre)]
-    for d in docs:
-        if not d.exists: continue
-        doc = d.to_dict() or {}
-        if (doc.get("entrenador","").strip().lower() != correo_entrenador): 
-            continue
-        cliente_nombre = doc.get("cliente") or doc.get("nombre") or "(sin nombre)"
-        correo_cliente = doc.get("correo") or ""  # correo del deportista
-        bloque_id = doc.get("bloque_rutina")
-        if not correo_cliente or not bloque_id: 
-            continue
-        pares.append((correo_cliente, str(bloque_id), cliente_nombre))
-
-    # quitar duplicados
-    pares_unicos = {}
-    for c_mail, b_id, c_nombre in pares:
-        pares_unicos[(c_mail, b_id)] = c_nombre  # conserva último nombre
-
-    # cache de fechas por (correo_cliente, bloque_id)
-    fechas_por_bloque = {}
-    for (c_mail, b_id), c_nombre in pares_unicos.items():
-        q = (
-            col.where("correo", "==", c_mail)
-               .where("bloque_rutina", "==", b_id)
-        )
-        semanas_bloque = list(q.stream())
-        fechas = []
-        for r in semanas_bloque:
-            dct = r.to_dict() or {}
-            f = dct.get("fecha_lunes") or parse_fecha_de_id(r.id)
-            if f: fechas.append(f)
-        fechas = sorted(set(fechas))
-        fechas_por_bloque[(c_mail, b_id)] = fechas
-
-    # construir avance por cada doc de esta semana
-    for d in docs:
-        if not d.exists: continue
-        doc = d.to_dict() or {}
-        if (doc.get("entrenador","").strip().lower() != correo_entrenador): 
-            continue
-        cliente_nombre = doc.get("cliente") or doc.get("nombre") or "(sin nombre)"
-        correo_cliente = doc.get("correo") or ""
-        bloque_id = doc.get("bloque_rutina")
-        if not correo_cliente or not bloque_id:
-            continue
-        fechas = fechas_por_bloque.get((correo_cliente, str(bloque_id)), [])
-        try:
-            semana_idx = fechas.index(fecha_lunes.isoformat()) + 1
-            total = len(fechas)
-            avances.append((cliente_nombre, semana_idx, total, str(bloque_id)))
-        except ValueError:
-            # semana no encontrada en ese bloque (puede ser otra semana cargada manualmente)
-            avances.append((cliente_nombre, None, len(fechas), str(bloque_id)))
-
-    if avances:
-        st.subheader("🧭 Resumen de avance de bloque (semana seleccionada)")
-        # ordenar por nombre
-        avances = sorted(avances, key=lambda x: x[0].lower())
-        for nombre, idx, total, b in avances:
-            if idx is None or total == 0:
-                st.markdown(f"- **{nombre}** — bloque `{b}` (sin posición para esta semana)")
-            else:
-                st.markdown(f"- **{nombre}** — Semana **{idx}** de **{total}** (bloque `{b}`)")
-        st.divider()
-
-    # =========================
-    # 2) REPORTE AGRUPADO Cliente -> Día (series_data + RPE)
-    # =========================
-    filas_series, filas_rpe = [], []
-
-    for d in docs:
-        if not d.exists: continue
-        doc = d.to_dict() or {}
-
-        # seguridad por si el query no filtró
-        if (doc.get("entrenador","").strip().lower() != correo_entrenador):
-            continue
-        if (doc.get("fecha_lunes") or parse_fecha_de_id(d.id)) != fecha_lunes.isoformat():
-            continue
-
-        cliente = doc.get("cliente") or doc.get("nombre") or "(sin nombre)"
-        rutina = doc.get("rutina", {}) or {}
-
-        for dia_key, dia_node in rutina.items():
-            if str(dia_key) not in DIAS_VALIDOS:
-                continue
-            dia_label = f"Día {dia_key}"
-
-            # A) día = objeto {ejercicios:[...], rpe: X}
-            if isinstance(dia_node, dict):
                 if "rpe" in dia_node and es_no_vacio(dia_node.get("rpe")):
                     filas_rpe.append({"cliente": cliente, "día": dia_label, "rpe": dia_node.get("rpe")})
-
-                ejercicios = dia_node.get("ejercicios", [])
-                if isinstance(ejercicios, list):
-                    for ej in ejercicios:
-                        if not isinstance(ej, dict): 
+                ejercicios = normalizar_ejercicios(dia_node)
+                for ej in ejercicios:
+                    nombre_ej = ej.get("ejercicio") or ej.get("nombre") or ej.get("id_ejercicio") or "(sin nombre)"
+                    if filtro_ejercicio and filtro_ejercicio.lower() not in str(nombre_ej).lower():
+                        continue
+                    series_data = ej.get("series_data", [])
+                    comentario = (ej.get("comentario") or "").strip()
+                    if comentario and correo_cliente:
+                        prev = comentarios_vistos.get(correo_cliente)
+                        if prev is None or fecha_iso > prev:
+                            comentarios_vistos[correo_cliente] = fecha_iso
+                    if solo_con_datos:
+                        tiene_datos = any(isinstance(s, dict) and any(es_no_vacio(v) for v in s.values()) for s in series_data)
+                        if not tiene_datos and not comentario:
                             continue
-                        nombre_ej = ej.get("ejercicio") or ej.get("nombre") or ej.get("id_ejercicio") or "(sin nombre)"
-                        if filtro_ejercicio and filtro_ejercicio.lower() not in str(nombre_ej).lower():
-                            continue
-                        series_data = ej.get("series_data", [])
-                        if solo_con_datos:
-                            tiene_datos = any(isinstance(s, dict) and any(es_no_vacio(v) for v in s.values()) for s in series_data)
-                            if not tiene_datos:
-                                continue
-                        filas_series.extend(filas_series_data(cliente, dia_label, nombre_ej, series_data))
-
+                    filas_series.extend(filas_series_data(cliente, dia_label, nombre_ej, series_data, comentario=comentario))
             # B) día = lista de ejercicios
             elif isinstance(dia_node, list):
-                # rpe como rpe_1 / rpe1 a nivel de rutina
                 for rk in (f"rpe_{dia_key}", f"rpe{dia_key}"):
                     if rk in rutina and es_no_vacio(rutina.get(rk)):
                         filas_rpe.append({"cliente": cliente, "día": dia_label, "rpe": rutina.get(rk)})
                         break
-
-                for ej in dia_node:
-                    if not isinstance(ej, dict): 
-                        continue
+                ejercicios = normalizar_ejercicios(dia_node)
+                for ej in ejercicios:
                     nombre_ej = ej.get("ejercicio") or ej.get("nombre") or ej.get("id_ejercicio") or "(sin nombre)"
                     if filtro_ejercicio and filtro_ejercicio.lower() not in str(nombre_ej).lower():
                         continue
