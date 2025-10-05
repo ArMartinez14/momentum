@@ -11,6 +11,7 @@ from datetime import datetime
 
 # 👇 servicio de catálogos (tuyo)
 from servicio_catalogos import get_catalogos, add_item
+from app_core.utils import empresa_de_usuario, EMPRESA_MOTION, EMPRESA_ASESORIA, EMPRESA_DESCONOCIDA
 
 # ==========================
 # 🎨 PALETA / ESTILOS (solo UI)
@@ -357,6 +358,8 @@ def _render_cliente():
         else:
             st.info("No se encontraron entrenadores registrados; se asignará a tu correo por defecto.")
 
+    empresa_preferida = empresa_de_usuario(coach_responsable)
+
     if st.session_state.get("rol") == "admin":
         opciones_rol = ["deportista", "entrenador", "admin"]
     else:
@@ -365,6 +368,31 @@ def _render_cliente():
     st.markdown("<hr class='hr-light'>", unsafe_allow_html=True)
 
     rol = st.selectbox("Rol en la plataforma", opciones_rol, help="Define los permisos por defecto del cliente.")
+
+    empresa_seleccionada = empresa_preferida or EMPRESA_DESCONOCIDA
+    if es_admin():
+        opciones_empresa = {
+            "Motion": EMPRESA_MOTION,
+            "Asesoría": EMPRESA_ASESORIA,
+        }
+        default_label = next(
+            (label for label, valor in opciones_empresa.items() if valor == empresa_seleccionada),
+            "Motion",
+        )
+        empresa_label = st.selectbox(
+            "Empresa",
+            list(opciones_empresa.keys()),
+            index=list(opciones_empresa.keys()).index(default_label) if default_label in opciones_empresa else 0,
+            help="Selecciona la empresa asociada a este usuario."
+        )
+        empresa_seleccionada = opciones_empresa[empresa_label]
+    else:
+        if empresa_seleccionada == EMPRESA_MOTION:
+            st.caption("Empresa asignada automáticamente: Motion")
+        elif empresa_seleccionada == EMPRESA_ASESORIA:
+            st.caption("Empresa asignada automáticamente: Asesoría")
+        else:
+            st.caption("Este usuario se registrará sin empresa asignada.")
 
     st.markdown("<hr class='hr-light'>", unsafe_allow_html=True)
 
@@ -393,14 +421,26 @@ def _render_cliente():
                 st.markdown("</div>", unsafe_allow_html=True)
                 return
 
+            if rol == "entrenador" and not es_admin():
+                st.warning("⚠️ Solo un administrador puede crear entrenadores.")
+                st.markdown("</div>", unsafe_allow_html=True)
+                return
+
             doc_id = normalizar_id(correo_limpio)
             data = {
                 "nombre": nombre.strip(),
                 "correo": correo_limpio,
                 "rol": rol,
                 "creado_en": datetime.utcnow(),
-                "coach_responsable": coach_responsable,
+                "empresa": empresa_seleccionada or EMPRESA_DESCONOCIDA,
             }
+
+            if rol == "deportista":
+                data["coach_responsable"] = coach_responsable
+            elif es_admin():
+                data["coach_responsable"] = coach_responsable if coach_responsable else ""
+            else:
+                data["coach_responsable"] = coach_responsable
 
             try:
                 db.collection("usuarios").document(doc_id).set(data)

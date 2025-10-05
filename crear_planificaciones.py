@@ -1,8 +1,9 @@
 # crear_rutinas.py — Mismo estilo que ver_rutinas.py (solo UI/colores) + Restricción de circuitos por sección
 import streamlit as st
 import unicodedata
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta, datetime, timezone
 import pandas as pd
+import uuid
 # Catálogos para caracteristica / patrón / grupo
 from servicio_catalogos import get_catalogos, add_item
 from firebase_admin import firestore
@@ -45,6 +46,7 @@ LIGHT = dict(
 
 from app_core.firebase_client import get_db
 from app_core.theme import inject_theme
+from app_core.utils import empresa_de_usuario, EMPRESA_MOTION, EMPRESA_ASESORIA, EMPRESA_DESCONOCIDA, correo_a_doc_id
 
 # Selector de tema (ahora en la cabecera principal)
 control_bar = st.container()
@@ -195,6 +197,7 @@ ADMIN_ROLES = {"admin", "administrador", "owner", "Admin", "Administrador"}
 # ===== Roles / Helpers =====
 ADMIN_ROLES = {"admin", "administrador", "owner"}
 # ===== Roles / Helpers =====
+BORRADORES_COLLECTION = "rutinas_borrador"
 def _tiene_permiso_agregar() -> bool:
     rol = (st.session_state.get("rol") or "").strip().lower()
     return rol in {"admin", "administrador", "entrenador"}
@@ -423,6 +426,144 @@ def cargar_doc_en_session_base(rutina_dict: dict):
         st.session_state[f"rutina_dia_{int(d)}_Warm_Up"] = wu
         st.session_state[f"rutina_dia_{int(d)}_Work_Out"] = wo
 
+
+def _trigger_rerun():
+    """Compatibilidad con versiones nuevas/antiguas de Streamlit."""
+    rerun_fn = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+    if rerun_fn:
+        rerun_fn()
+
+
+def _sincronizar_filas_formulario(dias_labels: list[str]):
+    """Actualiza session_state con los valores más recientes de los widgets por día/sección."""
+    for idx_dia, _ in enumerate(dias_labels):
+        for seccion in ("Warm Up", "Work Out"):
+            key_seccion = f"rutina_dia_{idx_dia + 1}_{seccion.replace(' ', '_')}"
+            filas = st.session_state.get(key_seccion)
+            if not isinstance(filas, list):
+                continue
+
+            filas_actualizadas: list[dict] = []
+            for idx_fila, fila in enumerate(filas):
+                base = dict(fila)
+                key_entrenamiento = f"{idx_dia}_{seccion.replace(' ', '_')}_{idx_fila}"
+
+                buscar_key = f"buscar_{key_entrenamiento}"
+                base["BuscarEjercicio"] = st.session_state.get(buscar_key, base.get("BuscarEjercicio", ""))
+
+                circuito_val = st.session_state.get(f"circ_{key_entrenamiento}")
+                if circuito_val is not None:
+                    base["Circuito"] = circuito_val
+
+                buscar_val = st.session_state.get(f"buscar_{key_entrenamiento}")
+                if buscar_val is not None:
+                    base["BuscarEjercicio"] = buscar_val
+
+                select_val = st.session_state.get(f"select_{key_entrenamiento}")
+                if select_val:
+                    base["Ejercicio"] = select_val if select_val != "(sin resultados)" else (buscar_val or "").strip()
+                elif buscar_val is not None:
+                    base["Ejercicio"] = (buscar_val or "").strip()
+
+                for pref, campo in (
+                    ("det", "Detalle"),
+                    ("ser", "Series"),
+                    ("rmin", "RepsMin"),
+                    ("rmax", "RepsMax"),
+                    ("peso", "Peso"),
+                    ("tiempo", "Tiempo"),
+                    ("vel", "Velocidad"),
+                    ("desc", "Descanso"),
+                    ("rirmin", "RirMin"),
+                    ("rirmax", "RirMax"),
+                ):
+                    widget_val = st.session_state.get(f"{pref}_{key_entrenamiento}")
+                    if widget_val is not None:
+                        base[campo] = widget_val
+
+                for p in (1, 2, 3):
+                    var_key = f"var{p}_{key_entrenamiento}_{idx_fila}"
+                    cant_key = f"cant{p}_{key_entrenamiento}_{idx_fila}"
+                    ope_key = f"ope{p}_{key_entrenamiento}_{idx_fila}"
+                    sem_key = f"sem{p}_{key_entrenamiento}_{idx_fila}"
+                    cond_var_key = f"condvar{p}_{key_entrenamiento}_{idx_fila}"
+                    cond_op_key = f"condop{p}_{key_entrenamiento}_{idx_fila}"
+                    cond_val_key = f"condval{p}_{key_entrenamiento}_{idx_fila}"
+                    if var_key in st.session_state:
+                        base[f"Variable_{p}"] = st.session_state.get(var_key, base.get(f"Variable_{p}", ""))
+                        base[f"Cantidad_{p}"] = st.session_state.get(cant_key, base.get(f"Cantidad_{p}", ""))
+                        base[f"Operacion_{p}"] = st.session_state.get(ope_key, base.get(f"Operacion_{p}", ""))
+                        base[f"Semanas_{p}"] = st.session_state.get(sem_key, base.get(f"Semanas_{p}", ""))
+                        base[f"CondicionVar_{p}"] = st.session_state.get(cond_var_key, base.get(f"CondicionVar_{p}", ""))
+                        base[f"CondicionOp_{p}"] = st.session_state.get(cond_op_key, base.get(f"CondicionOp_{p}", ""))
+                        base[f"CondicionValor_{p}"] = st.session_state.get(cond_val_key, base.get(f"CondicionValor_{p}", ""))
+
+                filas_actualizadas.append(base)
+
+            st.session_state[key_seccion] = filas_actualizadas
+
+
+def _fila_para_borrador(fila: dict) -> dict:
+    """Elimina banderas internas antes de persistir una fila como borrador."""
+    limpia = {}
+    for k, v in (fila or {}).items():
+        if k.startswith("_"):
+            continue
+        limpia[k] = v
+    return limpia
+
+
+def _construir_datos_borrador(dias_labels: list[str]) -> dict:
+    """Genera la estructura {dia: {Warm Up: [...], Work Out: [...]}} para guardar como borrador."""
+    dias_data: dict[str, dict] = {}
+    for idx_dia, _ in enumerate(dias_labels):
+        dia_num = str(idx_dia + 1)
+        dia_payload: dict[str, list] = {}
+        for seccion in ("Warm Up", "Work Out"):
+            key_seccion = f"rutina_dia_{idx_dia + 1}_{seccion.replace(' ', '_')}"
+            if key_seccion not in st.session_state:
+                continue
+            filas = st.session_state.get(key_seccion, []) or []
+            dia_payload[seccion] = [_fila_para_borrador(dict(fila)) for fila in filas]
+        if dia_payload:
+            dias_data[dia_num] = dia_payload
+    return dias_data
+
+
+def _cargar_borrador_en_session(borrador: dict):
+    """Restaura los valores principales y los días de un borrador en session_state."""
+    if not isinstance(borrador, dict):
+        return
+
+    st.session_state["crear_nombre_cliente"] = borrador.get("cliente", "")
+    st.session_state["crear_correo_cliente"] = borrador.get("correo", "")
+    st.session_state["objetivo"] = borrador.get("objetivo", "")
+    st.session_state["crear_correo_entrenador"] = borrador.get("entrenador", st.session_state.get("correo", ""))
+
+    fecha_str = borrador.get("fecha_inicio")
+    if fecha_str:
+        try:
+            st.session_state["crear_fecha_inicio"] = datetime.strptime(fecha_str, "%Y-%m-%d").date()
+        except Exception:
+            pass
+
+    semanas_val = borrador.get("semanas")
+    if isinstance(semanas_val, int):
+        st.session_state["crear_num_semanas"] = semanas_val
+
+    dias_borrador = borrador.get("dias_data") or {}
+    _vaciar_dias_en_session()
+    for dia_num_str, secciones in dias_borrador.items():
+        try:
+            dia_idx = int(dia_num_str)
+        except (TypeError, ValueError):
+            continue
+        for seccion in ("Warm Up", "Work Out"):
+            key = f"rutina_dia_{dia_idx}_{seccion.replace(' ', '_')}"
+            filas = secciones.get(seccion)
+            if isinstance(filas, list):
+                st.session_state[key] = filas
+
 # ==========================
 #   PÁGINA: CREAR RUTINAS
 # ==========================
@@ -434,6 +575,27 @@ def crear_rutinas():
 
     st.markdown("<h2 class='h-accent'>Crear nueva rutina</h2>", unsafe_allow_html=True)
 
+    status_msg = st.session_state.pop("borrador_status_msg", None)
+    if status_msg:
+        status_type = st.session_state.pop("borrador_status_type", "success")
+        if status_type == "success":
+            st.success(status_msg)
+        elif status_type == "warning":
+            st.warning(status_msg)
+        elif status_type == "error":
+            st.error(status_msg)
+        else:
+            st.info(status_msg)
+
+    borrador_activo_id = st.session_state.get("rutina_borrador_activo_id")
+    if borrador_activo_id:
+        borrador_label = (
+            st.session_state.get("rutina_borrador_activo_cliente")
+            or st.session_state.get("crear_correo_cliente")
+            or ""
+        )
+        st.caption(f"📝 Editando borrador: {borrador_label} (ID {borrador_activo_id[:8]})")
+
     # --- Tarjeta de filtros principales ---
     st.markdown("<div class='card'>", unsafe_allow_html=True)
 
@@ -441,11 +603,35 @@ def crear_rutinas():
     usuarios = cargar_usuarios()
 
     correo_login = (st.session_state.get("correo") or "").strip().lower()
-    if rol in ("entrenador",) and correo_login:
-        usuarios = [
-            u for u in usuarios
-            if (u.get("coach_responsable") or "").strip().lower() == correo_login
-        ]
+    usuarios_map: dict[str, dict] = {}
+    for u in usuarios:
+        correo_u = (u.get("correo") or "").strip().lower()
+        if correo_u:
+            usuarios_map[correo_u] = u
+            usuarios_map[correo_a_doc_id(correo_u)] = u
+
+    if rol == "entrenador" and correo_login:
+        empresa_entrenador = empresa_de_usuario(correo_login, usuarios_map)
+        if empresa_entrenador == EMPRESA_ASESORIA:
+            usuarios = [
+                u for u in usuarios
+                if (u.get("coach_responsable") or "").strip().lower() == correo_login
+            ]
+        elif empresa_entrenador == EMPRESA_MOTION:
+            usuarios_filtrados = []
+            for u in usuarios:
+                correo_cli = (u.get("correo") or "").strip().lower()
+                empresa_cli = empresa_de_usuario(correo_cli, usuarios_map)
+                if empresa_cli == EMPRESA_MOTION:
+                    usuarios_filtrados.append(u)
+                elif empresa_cli == EMPRESA_DESCONOCIDA and (u.get("coach_responsable") or "").strip().lower() == correo_login:
+                    usuarios_filtrados.append(u)
+            usuarios = usuarios_filtrados
+        else:
+            usuarios = [
+                u for u in usuarios
+                if (u.get("coach_responsable") or "").strip().lower() == correo_login
+            ]
 
     nombres = sorted(set(u.get("nombre", "") for u in usuarios))
     correos_entrenadores = sorted([
@@ -453,29 +639,35 @@ def crear_rutinas():
     ])
 
     # === Selección de cliente/semana ===
-    nombre_input = st.text_input("Escribe el nombre del cliente:")
+    nombre_input = st.text_input("Escribe el nombre del cliente:", key="crear_nombre_cliente")
     coincidencias = [n for n in nombres if nombre_input.lower() in (n or "").lower()]
     nombre_sel = st.selectbox("Selecciona de la lista:", coincidencias) if coincidencias else ""
 
     correo_auto = next((u.get("correo", "") for u in usuarios if u.get("nombre") == nombre_sel), "")
-    correo = st.text_input("Correo del cliente:", value=correo_auto)
+    correo = st.text_input("Correo del cliente:", value=correo_auto, key="crear_correo_cliente")
 
     valor_defecto = proximo_lunes()
     sel = st.date_input(
         "Fecha de inicio de rutina:",
         value=valor_defecto,
-        help="Solo se usan lunes. Si eliges otro día, se ajustará automáticamente al lunes de esa semana."
+        help="Solo se usan lunes. Si eliges otro día, se ajustará automáticamente al lunes de esa semana.",
+        key="crear_fecha_inicio",
     )
     fecha_inicio = sel - timedelta(days=sel.weekday()) if sel.weekday() != 0 else sel
     if sel.weekday() != 0:
         st.markdown("<span class='badge badge--warn'>Ajustado automáticamente al lunes seleccionado</span>", unsafe_allow_html=True)
 
-    semanas = st.number_input("Semanas de duración:", min_value=1, max_value=12, value=4)
+    semanas = st.number_input("Semanas de duración:", min_value=1, max_value=12, value=4, key="crear_num_semanas")
 
     objetivo = st.text_area("🎯 Objetivo de la rutina (opcional)", value=st.session_state.get("objetivo", ""))
     st.session_state["objetivo"] = objetivo
 
-    entrenador = st.text_input("Correo del entrenador responsable:", value=correo_login, disabled=True)
+    entrenador = st.text_input(
+        "Correo del entrenador responsable:",
+        value=correo_login,
+        disabled=True,
+        key="crear_correo_entrenador",
+    )
     # === 📥 Cargar rutina previa del MISMO cliente como base (opcional) ===
     with st.expander("📥 Cargar rutina previa como base", expanded=False):
         correo_base = (correo or "").strip().lower()
@@ -533,6 +725,109 @@ def crear_rutinas():
                         import traceback
                         st.error(f"No se pudo cargar la rutina base: {e}")
                         st.code("".join(traceback.format_exc()))
+
+    with st.expander("📝 Borradores en progreso", expanded=False):
+        correo_borrador = (st.session_state.get("crear_correo_cliente") or correo or "").strip().lower()
+        usuario_actual = (st.session_state.get("correo") or "").strip().lower()
+
+        if not correo_borrador:
+            st.info("Ingresa el nombre y correo del cliente para ver borradores guardados.")
+        else:
+            try:
+                db = get_db()
+                query = db.collection(BORRADORES_COLLECTION).where("correo", "==", correo_borrador)
+                borradores_raw = []
+                for doc in query.stream():
+                    data = doc.to_dict() or {}
+                    creador_doc = (data.get("creado_por") or "").strip().lower()
+                    if usuario_actual and creador_doc and creador_doc != usuario_actual:
+                        continue
+                    data["_id"] = doc.id
+                    borradores_raw.append(data)
+            except Exception as e:
+                st.error(f"Error al leer borradores: {e}")
+                borradores_raw = []
+
+            if not borradores_raw:
+                st.info("No hay borradores guardados para este cliente.")
+            else:
+                def _timestamp_to_dt(value):
+                    if hasattr(value, "to_datetime"):
+                        value = value.to_datetime()
+                    if isinstance(value, datetime):
+                        if value.tzinfo is not None:
+                            return value.astimezone(timezone.utc).replace(tzinfo=None)
+                        return value
+                    return None
+
+                def _formato_borrador(idx: int) -> str:
+                    borrador = borradores_raw[idx]
+                    fecha_inicio_lbl = borrador.get("fecha_inicio") or "Sin fecha"
+                    ts = _timestamp_to_dt(borrador.get("updated_at") or borrador.get("created_at"))
+                    updated_lbl = ts.strftime("%Y-%m-%d %H:%M") if ts else "Sin actualización"
+
+                    dias_data = borrador.get("dias_data") or {}
+                    dias_contenido = 0
+                    total_ejercicios = 0
+                    for secciones in dias_data.values():
+                        dia_tiene_datos = False
+                        if isinstance(secciones, dict):
+                            for lista in secciones.values():
+                                if not isinstance(lista, list):
+                                    continue
+                                for fila in lista:
+                                    if isinstance(fila, dict) and (
+                                        (fila.get("Ejercicio") or "").strip()
+                                        or (fila.get("BuscarEjercicio") or "").strip()
+                                    ):
+                                        dia_tiene_datos = True
+                                        total_ejercicios += 1
+                        if dia_tiene_datos:
+                            dias_contenido += 1
+
+                    return (
+                        f"Inicio {fecha_inicio_lbl} · {dias_contenido} día(s) · "
+                        f"{total_ejercicios} ejercicio(s) · Última ed. {updated_lbl}"
+                    )
+
+                borradores_raw.sort(
+                    key=lambda d: _timestamp_to_dt(d.get("updated_at") or d.get("created_at")) or datetime.min,
+                    reverse=True,
+                )
+                opciones = list(range(len(borradores_raw)))
+                idx_sel = st.selectbox(
+                    "Selecciona un borrador:",
+                    opciones,
+                    format_func=_formato_borrador,
+                    key="seleccion_borrador_crear",
+                )
+
+                cols_borradores = st.columns([1, 1], gap="small")
+                if cols_borradores[0].button("Cargar borrador", key="btn_cargar_borrador"):
+                    _cargar_borrador_en_session(borradores_raw[idx_sel])
+                    st.session_state["rutina_borrador_activo_id"] = borradores_raw[idx_sel]["_id"]
+                    st.session_state["rutina_borrador_activo_cliente"] = (
+                        borradores_raw[idx_sel].get("cliente")
+                        or borradores_raw[idx_sel].get("correo")
+                        or ""
+                    )
+                    st.session_state["borrador_status_msg"] = "Borrador cargado en el editor."
+                    st.session_state["borrador_status_type"] = "success"
+                    _trigger_rerun()
+
+                if cols_borradores[1].button("Eliminar borrador", key="btn_eliminar_borrador"):
+                    doc_id = borradores_raw[idx_sel]["_id"]
+                    try:
+                        db.collection(BORRADORES_COLLECTION).document(doc_id).delete()
+                        if st.session_state.get("rutina_borrador_activo_id") == doc_id:
+                            st.session_state.pop("rutina_borrador_activo_id", None)
+                            st.session_state.pop("rutina_borrador_activo_cliente", None)
+                        st.session_state["borrador_status_msg"] = "Borrador eliminado."
+                        st.session_state["borrador_status_type"] = "success"
+                    except Exception as e:
+                        st.session_state["borrador_status_msg"] = f"No se pudo eliminar el borrador: {e}"
+                        st.session_state["borrador_status_type"] = "error"
+                    _trigger_rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)  # /card
     st.markdown("<div class='hr-light'></div>", unsafe_allow_html=True)
@@ -1319,75 +1614,67 @@ def crear_rutinas():
                     st.dataframe(pd.DataFrame(tabla), use_container_width=True, hide_index=True)
 
     # ======= Guardar =======
-    if st.button("Guardar Rutina", type="primary", use_container_width=True):
+    botones_guardado = st.columns([1, 1], gap="medium")
+    guardar_borrador_click = botones_guardado[0].button(
+        "💾 Guardar borrador", type="secondary", use_container_width=True
+    )
+    guardar_rutina_click = botones_guardado[1].button(
+        "Guardar Rutina", type="primary", use_container_width=True
+    )
+
+    if guardar_borrador_click:
+        correo_ingresado = str(correo).strip()
+        if not correo_ingresado:
+            st.warning("⚠️ Ingresa el correo del cliente antes de guardar un borrador.")
+        else:
+            _sincronizar_filas_formulario(dias_labels)
+            dias_data = _construir_datos_borrador(dias_labels)
+
+            correo_norm = correo_ingresado.lower()
+            nombre_cliente = str(nombre_sel or nombre_input).strip()
+            entrenador_val = str(entrenador).strip()
+            objetivo_val = st.session_state.get("objetivo", "")
+            fecha_iso = fecha_inicio.strftime("%Y-%m-%d") if isinstance(fecha_inicio, date) else ""
+            semanas_val = int(semanas)
+            creador_val = (st.session_state.get("correo") or "").strip().lower() or entrenador_val.strip().lower()
+
+            payload = {
+                "cliente": nombre_cliente,
+                "correo": correo_norm,
+                "entrenador": entrenador_val,
+                "objetivo": objetivo_val,
+                "fecha_inicio": fecha_iso,
+                "semanas": semanas_val,
+                "dias_labels": dias_labels,
+                "dias_data": dias_data,
+                "creado_por": creador_val,
+                "updated_at": firestore.SERVER_TIMESTAMP,
+            }
+
+            draft_id = st.session_state.get("rutina_borrador_activo_id")
+            try:
+                db = get_db()
+                if draft_id:
+                    db.collection(BORRADORES_COLLECTION).document(draft_id).set(payload, merge=True)
+                else:
+                    draft_id = uuid.uuid4().hex
+                    payload["created_at"] = firestore.SERVER_TIMESTAMP
+                    db.collection(BORRADORES_COLLECTION).document(draft_id).set(payload)
+
+                st.session_state["rutina_borrador_activo_id"] = draft_id
+                st.session_state["rutina_borrador_activo_cliente"] = nombre_cliente or correo_norm
+                st.session_state["borrador_status_msg"] = "Borrador guardado correctamente."
+                st.session_state["borrador_status_type"] = "success"
+            except Exception as e:
+                st.session_state["borrador_status_msg"] = f"No se pudo guardar el borrador: {e}"
+                st.session_state["borrador_status_type"] = "error"
+
+            _trigger_rerun()
+
+    if guardar_rutina_click:
         if all([str(nombre_sel).strip(), str(correo).strip(), str(entrenador).strip()]):
-            objetivo = st.session_state.get("objetivo", "")
-            # Forzar sincronización de los datos editados en todos los días/secciones
-            for idx_dia, _ in enumerate(dias_labels):
-                for seccion in ("Warm Up", "Work Out"):
-                    key_seccion = f"rutina_dia_{idx_dia + 1}_{seccion.replace(' ', '_')}"
-                    filas = st.session_state.get(key_seccion)
-                    if not isinstance(filas, list):
-                        continue
-                    filas_actualizadas: list[dict] = []
-                    for idx_fila, fila in enumerate(filas):
-                        base = dict(fila)
-                        key_entrenamiento = f"{idx_dia}_{seccion.replace(' ', '_')}_{idx_fila}"
-
-                        buscar_key = f"buscar_{key_entrenamiento}"
-                        base["BuscarEjercicio"] = st.session_state.get(buscar_key, base.get("BuscarEjercicio", ""))
-
-                        circuito_val = st.session_state.get(f"circ_{key_entrenamiento}")
-                        if circuito_val is not None:
-                            base["Circuito"] = circuito_val
-
-                        buscar_val = st.session_state.get(f"buscar_{key_entrenamiento}")
-                        if buscar_val is not None:
-                            base["BuscarEjercicio"] = buscar_val
-
-                        select_val = st.session_state.get(f"select_{key_entrenamiento}")
-                        if select_val:
-                            base["Ejercicio"] = select_val if select_val != "(sin resultados)" else (buscar_val or "").strip()
-                        elif buscar_val is not None:
-                            base["Ejercicio"] = (buscar_val or "").strip()
-
-                        for pref, campo in (
-                            ("det", "Detalle"),
-                            ("ser", "Series"),
-                            ("rmin", "RepsMin"),
-                            ("rmax", "RepsMax"),
-                            ("peso", "Peso"),
-                            ("tiempo", "Tiempo"),
-                            ("vel", "Velocidad"),
-                            ("desc", "Descanso"),
-                            ("rirmin", "RirMin"),
-                            ("rirmax", "RirMax"),
-                        ):
-                            widget_val = st.session_state.get(f"{pref}_{key_entrenamiento}")
-                            if widget_val is not None:
-                                base[campo] = widget_val
-
-                        # Progresiones (1..3)
-                        for p in (1, 2, 3):
-                            var_key = f"var{p}_{key_entrenamiento}_{idx_fila}"
-                            cant_key = f"cant{p}_{key_entrenamiento}_{idx_fila}"
-                            ope_key = f"ope{p}_{key_entrenamiento}_{idx_fila}"
-                            sem_key = f"sem{p}_{key_entrenamiento}_{idx_fila}"
-                            cond_var_key = f"condvar{p}_{key_entrenamiento}_{idx_fila}"
-                            cond_op_key = f"condop{p}_{key_entrenamiento}_{idx_fila}"
-                            cond_val_key = f"condval{p}_{key_entrenamiento}_{idx_fila}"
-                            if var_key in st.session_state:
-                                base[f"Variable_{p}"] = st.session_state.get(var_key, base.get(f"Variable_{p}", ""))
-                                base[f"Cantidad_{p}"] = st.session_state.get(cant_key, base.get(f"Cantidad_{p}", ""))
-                                base[f"Operacion_{p}"] = st.session_state.get(ope_key, base.get(f"Operacion_{p}", ""))
-                                base[f"Semanas_{p}"] = st.session_state.get(sem_key, base.get(f"Semanas_{p}", ""))
-                                base[f"CondicionVar_{p}"] = st.session_state.get(cond_var_key, base.get(f"CondicionVar_{p}", ""))
-                                base[f"CondicionOp_{p}"] = st.session_state.get(cond_op_key, base.get(f"CondicionOp_{p}", ""))
-                                base[f"CondicionValor_{p}"] = st.session_state.get(cond_val_key, base.get(f"CondicionValor_{p}", ""))
-
-                        filas_actualizadas.append(base)
-
-                    st.session_state[key_seccion] = filas_actualizadas
+            objetivo_val = st.session_state.get("objetivo", "")
+            _sincronizar_filas_formulario(dias_labels)
             guardar_rutina(
                 nombre_sel.strip(),
                 correo.strip(),
@@ -1395,7 +1682,9 @@ def crear_rutinas():
                 fecha_inicio,
                 int(semanas),
                 dias_labels,
-                objetivo=objetivo,
+                objetivo=objetivo_val,
             )
+            st.session_state.pop("rutina_borrador_activo_id", None)
+            st.session_state.pop("rutina_borrador_activo_cliente", None)
         else:
             st.warning("⚠️ Completa nombre, correo y entrenador antes de guardar.")

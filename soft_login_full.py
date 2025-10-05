@@ -143,6 +143,7 @@ def _find_user(correo: str):
             "correo": d.get("correo", correo).strip().lower(),
             "nombre": d.get("nombre", ""),
             "rol": (d.get("rol", "") or "deportista").strip().lower(),
+            "activo": False if d.get("activo") is False else True,
         }
     except Exception:
         return None
@@ -325,6 +326,12 @@ def soft_login_barrier(required_roles=None, titulo="Bienvenido", ttl_seconds: in
     cm = _hydrate_from_cookie()
 
     if st.session_state.get("correo"):
+        user_data = _find_user(st.session_state.get("correo"))
+        if not user_data or not user_data.get("activo", True):
+            st.error("Tu cuenta está desactivada. Contacta al administrador.")
+            if st.button("Cambiar de cuenta", key="btn_logout_inactivo"):
+                soft_logout()
+            return False
         if required_roles:
             rol = (st.session_state.get("rol") or "").lower()
             if rol not in [r.lower() for r in required_roles]:
@@ -357,6 +364,10 @@ def soft_login_barrier(required_roles=None, titulo="Bienvenido", ttl_seconds: in
         user = _find_user(correo)
         if not user:
             st.error("Correo no encontrado en la colección 'usuarios'.")
+            st.stop()
+
+        if not user.get("activo", True):
+            st.error("Tu cuenta está desactivada. Contacta al administrador.")
             st.stop()
 
         st.session_state.correo = user["correo"]

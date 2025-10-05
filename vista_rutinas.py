@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import time
 from app_core.firebase_client import get_db
 from app_core.theme import inject_theme
+from app_core.utils import empresa_de_usuario, EMPRESA_MOTION, EMPRESA_ASESORIA
 
 # ==========================
 #  PALETA / ESTILOS con soporte claro/oscuro
@@ -195,12 +196,21 @@ def _rirstr(e: dict) -> str:
       - valor 'legacy' si viene como texto único en e['rir'] / e['RIR'] / e['Rir']
       - "" si no hay datos
     """
-    # 1) Nuevos campos con rango
-    rmin = e.get("RirMin") or e.get("rir_min") or e.get("RIR_min")
-    rmax = e.get("RirMax") or e.get("rir_max") or e.get("RIR_max")
+    # 1) Nuevos campos con rango (preservando valores 0)
+    def _pick(*valores):
+        for v in valores:
+            if v is None:
+                continue
+            if isinstance(v, str) and v.strip() == "":
+                continue
+            return v
+        return None
 
-    rmin_s = str(rmin).strip() if rmin not in (None, "") else ""
-    rmax_s = str(rmax).strip() if rmax not in (None, "") else ""
+    rmin = _pick(e.get("RirMin"), e.get("rir_min"), e.get("RIR_min"))
+    rmax = _pick(e.get("RirMax"), e.get("rir_max"), e.get("RIR_max"))
+
+    rmin_s = str(rmin).strip() if rmin is not None else ""
+    rmax_s = str(rmax).strip() if rmax is not None else ""
 
     if rmin_s and rmax_s:
         return f"{rmin_s}–{rmax_s}"
@@ -725,7 +735,6 @@ def ver_rutinas():
     cliente_sel = None
     if es_entrenador(rol):
         rol_lower = rol.strip().lower()
-        limitar_por_responsable = rol_lower == "entrenador"
 
         @st.cache_data(show_spinner=False)
         def _usuarios_por_correo():
@@ -738,56 +747,117 @@ def ver_rutinas():
                     correo_cli = (data.get("correo") or "").strip().lower()
                     if correo_cli:
                         mapping[correo_cli] = data
+                        mapping[normalizar_correo(correo_cli)] = data
             except Exception:
                 pass
             return mapping
 
-        usuarios_por_correo = _usuarios_por_correo() if limitar_por_responsable else {}
+        usuarios_por_correo = _usuarios_por_correo()
+        empresa_entrenador = empresa_de_usuario(correo_raw, usuarios_por_correo)
+        es_motion_entrenador = empresa_entrenador == EMPRESA_MOTION
+        es_asesoria_entrenador = empresa_entrenador == EMPRESA_ASESORIA
+
         correos_entrenador = {correo_raw}
         if correo_norm:
             correos_entrenador.add(correo_norm)
         correos_entrenador.add(normalizar_correo(correo_raw))
 
         def _cliente_autorizado(rutina_doc: dict) -> bool:
-            if not limitar_por_responsable:
+            if rol_lower != "entrenador":
                 return True
+
             correo_cliente = (rutina_doc.get("correo") or "").strip().lower()
-            if not correo_cliente:
-                return False
-            datos_cli = usuarios_por_correo.get(correo_cliente)
+            datos_cli = usuarios_por_correo.get(correo_cliente) or usuarios_por_correo.get(normalizar_correo(correo_cliente))
             responsable = (datos_cli.get("coach_responsable") or "").strip().lower() if datos_cli else ""
+            entrenador_reg = (rutina_doc.get("entrenador") or "").strip().lower()
+            entrenador_reg_norm = normalizar_correo(rutina_doc.get("entrenador") or "")
+
+            if es_asesoria_entrenador:
+                return responsable == correo_raw
+
+            if es_motion_entrenador:
+                if entrenador_reg in correos_entrenador or entrenador_reg_norm in correos_entrenador:
+                    return True
+                if correo_cliente and empresa_de_usuario(correo_cliente, usuarios_por_correo) == EMPRESA_MOTION:
+                    return True
+                return False
+
             if responsable and responsable == correo_raw:
                 return True
-            entrenador_reg = (rutina_doc.get("entrenador") or "").strip().lower()
             if entrenador_reg and entrenador_reg in correos_entrenador:
                 return True
-            if entrenador_reg and normalizar_correo(entrenador_reg) in correos_entrenador:
+            if entrenador_reg_norm in correos_entrenador:
                 return True
             return False
 
-        clientes = sorted({
-            (r.get("cliente") or "").strip()
-            for r in rutinas_all
-            if r.get("cliente") and _cliente_autorizado(r)
-        })
-        if not clientes:
+        clientes_empresa_info: dict[str, set[str]] = {}
+        for r in rutinas_all:
+            nombre_cli = (r.get("cliente") or "").strip()
+            if not nombre_cli:
+                continue
+            correo_cli = (r.get("correo") or "").strip().lower()
+            permitido = _cliente_autorizado(r)
+            if rol_lower == "entrenador":
+                if es_asesoria_entrenador:
+                    permitido = permitido and ((usuarios_por_correo.get(correo_cli) or {}).get("coach_responsable", "").strip().lower() == correo_raw)
+                elif es_motion_entrenador:
+                    permitido = permitido or (correo_cli and empresa_de_usuario(correo_cli, usuarios_por_correo) == EMPRESA_MOTION)
+            if permitido:
+                clientes_empresa_info.setdefault(nombre_cli, set())
+                if correo_cli:
+                    clientes_empresa_info[nombre_cli].add(correo_cli)
+                else:
+                    clientes_empresa_info[nombre_cli].add("__no_email__")
+
+        if rol_lower == "entrenador":
+            if es_asesoria_entrenador:
+                clientes_tarjetas = []
+                for r in rutinas_all:
+                    nombre_cli = (r.get("cliente") or "").strip()
+                    if not nombre_cli:
+                        continue
+                    correo_cli = (r.get("correo") or "").strip().lower()
+                    datos_cli = usuarios_por_correo.get(correo_cli) or usuarios_por_correo.get(normalizar_correo(correo_cli)) or {}
+                    coach_resp_cli = (datos_cli.get("coach_responsable") or "").strip().lower()
+                    if coach_resp_cli == correo_raw:
+                        clientes_tarjetas.append(nombre_cli)
+                clientes_tarjetas = sorted(set(clientes_tarjetas))
+            else:
+                clientes_tarjetas = []
+                for r in rutinas_all:
+                    nombre_cli = (r.get("cliente") or "").strip()
+                    if not nombre_cli:
+                        continue
+                    entrenador_reg = (r.get("entrenador") or "").strip().lower()
+                    entrenador_reg_norm = normalizar_correo(r.get("entrenador") or "")
+                    if entrenador_reg in correos_entrenador or entrenador_reg_norm in correos_entrenador:
+                        clientes_tarjetas.append(nombre_cli)
+                clientes_tarjetas = sorted(set(clientes_tarjetas))
+        else:
+            clientes_tarjetas = sorted(clientes_empresa_info.keys())
+
+        if not clientes_empresa_info:
             st.info("No hay clientes registrados aún."); st.stop()
 
         busqueda = st.text_input("Busca deportista", key="cliente_input", placeholder="Escribe un nombre…")
         busqueda_lower = busqueda.lower()
-        clientes_asignados = clientes
+        clientes_asignados = clientes_tarjetas
 
-        base_lista = clientes_asignados if rol_lower in {"entrenador", "admin", "administrador"} else clientes
+        base_lista = clientes_tarjetas if clientes_tarjetas else sorted(clientes_empresa_info.keys())
 
         if busqueda_lower:
-            candidatos = [c for c in clientes if busqueda_lower in c.lower()]
+            candidatos = [
+                nombre_cli
+                for nombre_cli, correos_cli in clientes_empresa_info.items()
+                if busqueda_lower in nombre_cli.lower() or any(busqueda_lower in c for c in correos_cli)
+            ]
         else:
             candidatos = base_lista
 
         if "_mostrar_lista_clientes" not in st.session_state:
             st.session_state["_mostrar_lista_clientes"] = True
 
-        if st.session_state.get("_cliente_sel") not in clientes:
+        if st.session_state.get("_cliente_sel") not in clientes_empresa_info:
             st.session_state.pop("_cliente_sel", None)
             st.session_state["_mostrar_lista_clientes"] = True
 
@@ -800,7 +870,7 @@ def ver_rutinas():
         if mostrar_lista or not cliente_sel:
             if not candidatos:
                 mensaje_sin_resultados = (
-                    "No tienes deportistas asignados. Usa la búsqueda para consultar otros." if rol_lower in {"entrenador", "admin", "administrador"} and not busqueda_lower
+                    "No tienes deportistas asignados. Usa la búsqueda para consultar otros." if (not clientes_asignados and not busqueda_lower)
                     else "No se encontraron coincidencias para esa búsqueda."
                 )
                 st.info(mensaje_sin_resultados)
@@ -844,7 +914,16 @@ def ver_rutinas():
             st.info("Selecciona un deportista y haz clic en \"Ver rutina\" para cargar su rutina.")
             st.stop()
 
-        rutinas_cliente = [r for r in rutinas_all if r.get("cliente")==cliente_sel]
+        correos_permitidos = clientes_empresa_info.get(cliente_sel, set())
+        rutinas_cliente = [
+            r for r in rutinas_all
+            if r.get("cliente") == cliente_sel
+            and (
+                not correos_permitidos
+                or "__no_email__" in correos_permitidos
+                or (r.get("correo") or "").strip().lower() in correos_permitidos
+            )
+        ]
     else:
         rutinas_cliente = [r for r in rutinas_all if (r.get("correo","") or "").strip().lower()==correo_raw]
         cliente_sel = nombre
