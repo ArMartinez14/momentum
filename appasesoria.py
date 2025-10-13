@@ -8,51 +8,6 @@ def _goto(menu_label: str):
     st.session_state["_menu_target"] = menu_label
     st.rerun()
 
-
-def _get_query_param_first(name: str) -> str | None:
-    try:
-        raw = st.query_params.get(name)
-    except Exception:
-        raw = None
-    if raw is None:
-        try:
-            raw = st.experimental_get_query_params().get(name)
-        except Exception:
-            raw = None
-    if isinstance(raw, list):
-        return raw[0] if raw else None
-    return raw
-
-
-def _sync_menu_query_param(value: str) -> None:
-    target = value or ""
-    try:
-        current = st.query_params.get("menu")
-        if isinstance(current, list):
-            current = current[0] if current else None
-    except Exception:
-        current = None
-    if current == target:
-        return
-    try:
-        st.query_params.update({"menu": target})
-        return
-    except Exception:
-        pass
-    try:
-        params = st.experimental_get_query_params()
-        if isinstance(params, dict):
-            normalized = {}
-            for k, v in params.items():
-                if isinstance(v, list):
-                    normalized[k] = v[0] if v else ""
-                elif v is not None:
-                    normalized[k] = str(v)
-            normalized["menu"] = target
-            st.experimental_set_query_params(**normalized)
-    except Exception:
-        pass
-
 # 2) Soft login (usa el módulo que ya probaste)
 from soft_login_full import soft_login_barrier, soft_logout
 from inicio import inicio_deportista, SEGUIMIENTO_LABEL
@@ -190,20 +145,14 @@ elif rol == "entrenador":
 else:
     opciones_menu = MENU_DEPORTISTA
 
+target_menu = st.session_state.pop("_menu_target", None)
+if "menu_radio" not in st.session_state:
+    st.session_state["menu_radio"] = opciones_menu[0]
+
 def _normalizar_menu(value: str | None) -> str:
     if value in (label_seg_2, SEGUIMIENTO_LABEL):
         return SEGUIMIENTO_LABEL
     return value or ""
-
-qp_menu_raw = _get_query_param_first("menu")
-qp_menu_norm = _normalizar_menu(qp_menu_raw) if qp_menu_raw else None
-
-target_menu = st.session_state.pop("_menu_target", None)
-if "menu_radio" not in st.session_state:
-    if qp_menu_norm and qp_menu_norm in opciones_menu:
-        st.session_state["menu_radio"] = qp_menu_norm
-    else:
-        st.session_state["menu_radio"] = opciones_menu[0]
 
 if target_menu is not None:
     target_menu = _normalizar_menu(target_menu)
@@ -216,8 +165,6 @@ menu_actual = _normalizar_menu(st.session_state.get("menu_radio"))
 if menu_actual not in opciones_menu:
     menu_actual = opciones_menu[0]
     st.session_state["menu_radio"] = menu_actual
-
-_sync_menu_query_param(menu_actual)
 
 header = st.container()
 with header:

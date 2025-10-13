@@ -25,8 +25,7 @@ __all__ = ["soft_login_barrier", "soft_logout", "soft_login_test_ui"]
 # Config
 # =========================
 COOKIE_NAME = "momentum_auth"
-COOKIE_TTL_SECONDS = 24 * 60 * 60    # 24 horas por defecto cuando no hay "Recordarme"
-REMEMBER_TTL_SECONDS = 7 * 24 * 3600
+COOKIE_TTL_SECONDS = 2 * 60 * 60     # 2 horas por defecto
 COL_USUARIOS = "usuarios"
 
 # Keys internas (session_state)
@@ -36,8 +35,6 @@ _CACHE_TOKEN_KEY  = "_softlogin_cached_token"   # token cacheado en memoria
 _BOOTSTRAP_FLAG   = "_softlogin_bootstrapped"   # 1 solo rerun inicial
 _KILL_TS_KEY      = "_softlogin_kill_ts"        # marca de logout
 _COOKIE_TS_FIELD  = "ts"                        # campo "ts" en la cookie
-_PAYLOAD_KEY      = "_softlogin_payload"        # último payload persistido
-_REMEMBER_KEY     = "_softlogin_remember"       # preferencia de recordarme
 
 # =========================
 # Helpers de URL (respaldo móvil)
@@ -172,19 +169,12 @@ def _cm():
 # Set/Get/Del cookie (robustos)
 # =========================
 def _set_cookie(cm, payload: dict, ttl: int):
-    ttl = int(ttl)
-    payload_to_store = dict(payload)
-    payload_to_store.setdefault(_COOKIE_TS_FIELD, int(time.time()))
-    payload_to_store["ttl"] = int(payload_to_store.get("ttl", ttl))
-
-    token = _signer().sign(json.dumps(payload_to_store).encode())
+    token = _signer().sign(json.dumps(payload).encode())
     if isinstance(token, (bytes, bytearray)):
         token = token.decode()
 
     # Cache en memoria para el siguiente render
     st.session_state[_CACHE_TOKEN_KEY] = token
-    st.session_state[_PAYLOAD_KEY] = payload_to_store
-    st.session_state[_REMEMBER_KEY] = bool(payload_to_store.get("remember"))
 
     # Respaldo en URL (para móviles donde la cookie puede no volver en el 1er refresh)
     _set_url_token(token)
@@ -310,13 +300,7 @@ def _hydrate_from_cookie():
         cookie_ts = int(data.get(_COOKIE_TS_FIELD, 0) or 0)
         if cookie_ts <= kill_ts:
             st.session_state[_BOOTSTRAP_FLAG] = True
-            st.session_state.pop(_PAYLOAD_KEY, None)
-            st.session_state.pop(_REMEMBER_KEY, None)
             return cm
-
-        remember_flag = bool(data.get("remember"))
-        if int(data.get("ttl") or 0) <= 0:
-            data["ttl"] = REMEMBER_TTL_SECONDS if remember_flag else COOKIE_TTL_SECONDS
 
         if not st.session_state.get("correo"):
             st.session_state.correo = data.get("correo", "")
@@ -324,8 +308,6 @@ def _hydrate_from_cookie():
             st.session_state.nombre = data.get("nombre", "")
             st.session_state.primer_nombre = data.get("primer_nombre", "")
 
-        st.session_state[_PAYLOAD_KEY] = data
-        st.session_state[_REMEMBER_KEY] = remember_flag
         st.session_state[_BOOTSTRAP_FLAG] = True
         return cm
 
@@ -358,24 +340,6 @@ def soft_login_barrier(required_roles=None, titulo="Bienvenido", ttl_seconds: in
                 if st.button("Cambiar de cuenta"):
                     soft_logout()
                 return False
-
-        remember_flag = bool(st.session_state.get(_REMEMBER_KEY, False))
-        payload = dict(st.session_state.get(_PAYLOAD_KEY) or {})
-        payload.update({
-            "correo": st.session_state.get("correo", ""),
-            "rol": st.session_state.get("rol", payload.get("rol", "")),
-            "nombre": st.session_state.get("nombre", payload.get("nombre", "")),
-            "primer_nombre": st.session_state.get("primer_nombre", payload.get("primer_nombre", "")),
-            "remember": remember_flag,
-            _COOKIE_TS_FIELD: int(time.time()),
-        })
-        ttl_pref = REMEMBER_TTL_SECONDS if remember_flag else ttl_seconds
-        payload["ttl"] = ttl_pref
-        if cm:
-            _set_cookie(cm, payload, ttl_pref)
-        else:
-            st.session_state[_PAYLOAD_KEY] = payload
-            st.session_state[_REMEMBER_KEY] = remember_flag
         return True
 
     # UI del login
@@ -412,18 +376,14 @@ def soft_login_barrier(required_roles=None, titulo="Bienvenido", ttl_seconds: in
         st.session_state.primer_nombre = (st.session_state.nombre.split()[0].title()
                                           if st.session_state.nombre else st.session_state.correo.split("@")[0].title())
 
-        remember_flag = bool(remember)
-        ttl = REMEMBER_TTL_SECONDS if remember_flag else ttl_seconds
-        payload = {
+        ttl = (7 * 24 * 3600) if remember else ttl_seconds
+        _set_cookie(cm, {
             "correo": st.session_state.correo,
             "rol": st.session_state.rol,
             "nombre": st.session_state.nombre,
             "primer_nombre": st.session_state.primer_nombre,
-            _COOKIE_TS_FIELD: int(time.time()),
-            "remember": remember_flag,
-            "ttl": ttl,
-        }
-        _set_cookie(cm, payload, ttl)
+            "ts": int(time.time()),
+        }, ttl)
 
         st.rerun()
 
@@ -443,8 +403,7 @@ def soft_logout():
 
     # Limpia estado y caches
     for k in ["correo", "rol", "nombre", "primer_nombre",
-              _CACHE_TOKEN_KEY, _BOOTSTRAP_FLAG,
-              _PAYLOAD_KEY, _REMEMBER_KEY]:
+              _CACHE_TOKEN_KEY, _BOOTSTRAP_FLAG]:
         st.session_state.pop(k, None)
 
     st.rerun()

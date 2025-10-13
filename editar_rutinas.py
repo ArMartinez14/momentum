@@ -170,27 +170,14 @@ def _asegurar_dia_en_session(idx_dia: int):
         if DEFAULT_WO_ROWS_NEW_DAY > 0:
             st.session_state[wo_key] = [_fila_vacia("Work Out") for _ in range(DEFAULT_WO_ROWS_NEW_DAY)]
 
-
-def _trigger_rerun():
-    rerun_fn = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
-    if rerun_fn:
-        rerun_fn()
-
 def _agregar_dia():
-    dias_actuales = st.session_state.get("dias_editables")
-    if not dias_actuales:
-        existentes = [key.split("_")[2] for key in st.session_state.keys() if key.startswith("rutina_dia_") and "Warm_Up" in key]
-        dias_actuales = sorted({d for d in existentes if d.isdigit()}, key=lambda x: int(x))
-        if not dias_actuales:
-            dias_actuales = ["1"]
-
-    nuevas = list(dias_actuales)
-    nuevo_idx = (max(int(d) for d in nuevas) + 1) if nuevas else 1
-    nuevas.append(str(nuevo_idx))
-    st.session_state["dias_editables"] = nuevas
+    dias = st.session_state.get("dias_editables", [])
+    nuevo_idx = (max([int(d) for d in dias]) + 1) if dias else 1
+    dias.append(str(nuevo_idx))
+    st.session_state["dias_editables"] = dias
     _asegurar_dia_en_session(nuevo_idx)
-    st.session_state["_dia_creado_msg"] = f"Día {nuevo_idx} agregado. Completa sus ejercicios y guarda los cambios."
-    _trigger_rerun()
+    try: st.rerun()
+    except AttributeError: st.experimental_rerun()
 
 def limpiar_dia(idx_dia: int):
     for seccion in ["Warm Up", "Work Out"]:
@@ -532,11 +519,8 @@ def editar_rutinas():
     dias_disponibles = claves_dias(rutina) if rutina else ["1","2","3","4","5"]
 
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    dias_en_ui = st.session_state.get("dias_editables", dias_disponibles)
-    dias_texto = ", ".join([f"**Día {int(d)}**" for d in dias_en_ui])
+    dias_texto = ", ".join([f"**Día {int(d)}**" for d in dias_disponibles])
     st.markdown(f"**N° Días de la rutina:** {dias_texto}")
-    if "_dia_creado_msg" in st.session_state:
-        st.info(st.session_state.pop("_dia_creado_msg"))
     if st.button("📥 Cargar rutina seleccionada", type="secondary"):
         cargar_doc_en_session(rutina, dias_disponibles)
         st.success("Rutina cargada en el editor ✅")
@@ -553,8 +537,6 @@ def editar_rutinas():
             _agregar_dia()
 
     # Si aún no hay "dias_editables", usamos los disponibles
-    if "dias_editables" not in st.session_state:
-        st.session_state["dias_editables"] = dias_disponibles.copy()
     dias_numericos = st.session_state.get("dias_editables", dias_disponibles)
     dias_labels = [f"Día {int(d)}" for d in dias_numericos]
 
@@ -594,10 +576,6 @@ def editar_rutinas():
 
             nueva_rutina = construir_rutina_desde_session(dias_labels_save)
 
-            bloque_objetivo = doc_data.get("bloque_rutina")
-            if not bloque_objetivo:
-                st.info("Esta semana no tiene bloque identificado; solo se actualizará la rutina seleccionada.")
-
             total = 0
             for doc in db.collection("rutinas_semanales").where("correo","==",correo).stream():
                 data = doc.to_dict() or {}
@@ -606,13 +584,6 @@ def editar_rutinas():
                     f_dt = datetime.strptime(f, "%Y-%m-%d")
                 except:
                     continue
-                if bloque_objetivo:
-                    bloque_doc = data.get("bloque_rutina")
-                    if doc.id != doc_id_semana and bloque_doc != bloque_objetivo:
-                        continue
-                else:
-                    if doc.id != doc_id_semana:
-                        continue
                 if f_dt >= fecha_sel:
                     rutina_existente = data.get("rutina", {}) or {}
                     for k_dia, lista in nueva_rutina.items():
@@ -620,10 +591,8 @@ def editar_rutinas():
                             rutina_existente[str(k_dia)] = lista
                     db.collection("rutinas_semanales").document(doc.id).update({"rutina": rutina_existente})
                     total += 1
-            if bloque_objetivo:
-                st.success(f"✅ Cambios aplicados en {total} semana(s) del bloque seleccionado.")
-            else:
-                st.success(f"✅ Cambios aplicados en {total} semana(s) (incluida la actual).")
+
+            st.success(f"✅ Cambios aplicados en {total} semana(s) (incluida la actual).")
 
 # Para ejecución directa en Streamlit multipage
 if __name__ == "__main__":
