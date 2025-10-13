@@ -9,6 +9,20 @@ from collections import defaultdict
 
 DIAS_VALIDOS = {"1","2","3","4","5"}
 
+def _doc_id_from_mail(mail: str) -> str:
+    return mail.replace('@','_').replace('.','_')
+
+def _comentarios_ack_map(_db, correo_entrenador: str) -> dict[str, str]:
+    try:
+        doc_id = _doc_id_from_mail(correo_entrenador)
+        snap = _db.collection("comentarios_ack").document(doc_id).get()
+        data = snap.to_dict() if snap.exists else {}
+        if not isinstance(data, dict):
+            return {}
+        return {str(k).strip().lower(): str(v) for k, v in data.items() if isinstance(k, str) and v}
+    except Exception:
+        return {}
+
 # ---------- Utils ----------
 def init_firebase():
     if not firebase_admin._apps:
@@ -34,15 +48,28 @@ def parse_fecha_de_id(doc_id: str) -> str | None:
     except Exception:
         return None
 
-def filas_series_data(cliente, dia_label, ejercicio_nombre, series_data):
+def filas_series_data(cliente, dia_label, ejercicio_nombre, series_data, comentario=""):
     filas = []
+    comentario = (comentario or "").strip()
+    tiene_series = False
     if not isinstance(series_data, list): return filas
     for idx, s in enumerate(series_data):
         if isinstance(s, dict) and any(es_no_vacio(v) for v in s.values()):
             fila = {"cliente": cliente, "día": dia_label, "ejercicio": ejercicio_nombre, "serie": idx + 1}
             for k, v in s.items():
                 fila[str(k)] = v
+            if comentario:
+                fila["comentario"] = comentario
             filas.append(fila)
+            tiene_series = True
+    if comentario and not tiene_series:
+        filas.append({
+            "cliente": cliente,
+            "día": dia_label,
+            "ejercicio": ejercicio_nombre,
+            "serie": "-",
+            "comentario": comentario,
+        })
     return filas
 
 # ---------- Vista ----------
@@ -78,6 +105,8 @@ def ver_reportes():
             docs = list(col.where("fecha_lunes", "==", fecha_lunes.isoformat()).stream())
         except Exception:
             docs = list(col.limit(300).stream())
+
+    ack_map = _comentarios_ack_map(db, correo_entrenador)
 
     # =========================
     # 1) RESUMEN: "Semana X de Y" por bloque (para esta semana)
@@ -154,6 +183,8 @@ def ver_reportes():
     # =========================
     filas_series, filas_rpe = [], []
 
+    comentarios_vistos = dict(ack_map)
+
     for d in docs:
         if not d.exists: continue
         doc = d.to_dict() or {}
@@ -166,6 +197,8 @@ def ver_reportes():
 
         cliente = doc.get("cliente") or doc.get("nombre") or "(sin nombre)"
         rutina = doc.get("rutina", {}) or {}
+        correo_cliente = (doc.get("correo") or "").strip().lower()
+        fecha_iso = fecha_lunes.isoformat()
 
         for dia_key, dia_node in rutina.items():
             if str(dia_key) not in DIAS_VALIDOS:
@@ -186,11 +219,16 @@ def ver_reportes():
                         if filtro_ejercicio and filtro_ejercicio.lower() not in str(nombre_ej).lower():
                             continue
                         series_data = ej.get("series_data", [])
+                        comentario = (ej.get("comentario") or "").strip()
+                        if comentario and correo_cliente:
+                            prev = comentarios_vistos.get(correo_cliente)
+                            if prev is None or fecha_iso > prev:
+                                comentarios_vistos[correo_cliente] = fecha_iso
                         if solo_con_datos:
                             tiene_datos = any(isinstance(s, dict) and any(es_no_vacio(v) for v in s.values()) for s in series_data)
-                            if not tiene_datos:
+                            if not tiene_datos and not comentario:
                                 continue
-                        filas_series.extend(filas_series_data(cliente, dia_label, nombre_ej, series_data))
+                        filas_series.extend(filas_series_data(cliente, dia_label, nombre_ej, series_data, comentario=comentario))
 
             # B) día = lista de ejercicios
             elif isinstance(dia_node, list):
@@ -207,11 +245,23 @@ def ver_reportes():
                     if filtro_ejercicio and filtro_ejercicio.lower() not in str(nombre_ej).lower():
                         continue
                     series_data = ej.get("series_data", [])
+                    comentario = (ej.get("comentario") or "").strip()
+                    if comentario and correo_cliente:
+                        prev = comentarios_vistos.get(correo_cliente)
+                        if prev is None or fecha_iso > prev:
+                            comentarios_vistos[correo_cliente] = fecha_iso
                     if solo_con_datos:
                         tiene_datos = any(isinstance(s, dict) and any(es_no_vacio(v) for v in s.values()) for s in series_data)
-                        if not tiene_datos:
+                        if not tiene_datos and not comentario:
                             continue
-                    filas_series.extend(filas_series_data(cliente, dia_label, nombre_ej, series_data))
+                    filas_series.extend(filas_series_data(cliente, dia_label, nombre_ej, series_data, comentario=comentario))
+
+    if comentarios_vistos:
+        try:
+            ack_doc = db.collection("comentarios_ack").document(_doc_id_from_mail(correo_entrenador))
+            ack_doc.set(comentarios_vistos, merge=True)
+        except Exception:
+            pass
 
     if filtro_cliente:
         f = filtro_cliente.strip().lower()
