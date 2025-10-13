@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import streamlit as st
+from streamlit.errors import StreamlitAPIException
 from firebase_admin import firestore
 from datetime import datetime, timedelta, date
 import json, random, re, math, html
@@ -13,39 +14,66 @@ from app_core.theme import inject_theme
 from app_core.utils import empresa_de_usuario, EMPRESA_MOTION, EMPRESA_ASESORIA, EMPRESA_DESCONOCIDA
 
 
+_QUERY_API_MODE: str | None = None  # "new" | "legacy"
+
+
 def _current_query_params() -> dict[str, str]:
-    try:
-        items = st.query_params.items()
-    except Exception:
+    global _QUERY_API_MODE
+
+    def _from_items(items):
+        out: dict[str, str] = {}
+        for key, value in items:
+            if isinstance(value, list):
+                if not value:
+                    continue
+                out[key] = value[0]
+            elif value is not None:
+                out[key] = str(value)
+        return out
+
+    if _QUERY_API_MODE == "legacy":
         try:
-            items = st.experimental_get_query_params().items()
+            return _from_items(st.experimental_get_query_params().items())
         except Exception:
             return {}
-    out: dict[str, str] = {}
-    for key, value in items:
-        if isinstance(value, list):
-            if not value:
-                continue
-            out[key] = value[0]
-        elif value is not None:
-            out[key] = str(value)
-    return out
+
+    try:
+        items = st.query_params.items()
+        _QUERY_API_MODE = "new"
+        return _from_items(items)
+    except StreamlitAPIException:
+        _QUERY_API_MODE = "legacy"
+        return _current_query_params()
+    except Exception:
+        return {}
 
 
 def _replace_query_params(params: dict[str, str | None]) -> None:
+    global _QUERY_API_MODE
+
     clean = {k: str(v) for k, v in params.items() if v is not None}
     if _current_query_params() == clean:
         return
+
+    if _QUERY_API_MODE == "legacy":
+        try:
+            st.experimental_set_query_params(**clean)
+        except Exception:
+            pass
+        return
+
     try:
         qp = st.query_params
         qp.clear()
         if clean:
             qp.update(clean)
-        return
-    except Exception:
-        pass
-    try:
-        st.experimental_set_query_params(**clean)
+        _QUERY_API_MODE = "new"
+    except StreamlitAPIException:
+        _QUERY_API_MODE = "legacy"
+        try:
+            st.experimental_set_query_params(**clean)
+        except Exception:
+            pass
     except Exception:
         pass
 
