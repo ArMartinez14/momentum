@@ -227,6 +227,10 @@ def guardar_ejercicio_firestore(nombre_final: str, payload_base: dict) -> None:
     publico_flag = bool(payload_base.pop("publico_flag", False)) if _es_admin else False
 
     # ⚠️ Guardamos todas las claves que la UI usa aguas abajo
+    empresa_propietaria = ""
+    if _correo:
+        empresa_propietaria = empresa_de_usuario(_correo)
+
     meta = {
         "nombre": nombre_final,
         "video": payload_base.get("video", ""),
@@ -240,6 +244,7 @@ def guardar_ejercicio_firestore(nombre_final: str, payload_base: dict) -> None:
         "buscable_id": slug_nombre(nombre_final),
         "publico": publico_flag,
         "entrenador": ("" if _es_admin else _correo),
+        "empresa_propietaria": empresa_propietaria,
         "updated_at": firestore.SERVER_TIMESTAMP,
         "created_at": firestore.SERVER_TIMESTAMP,
     }
@@ -251,11 +256,13 @@ def guardar_ejercicio_firestore(nombre_final: str, payload_base: dict) -> None:
     db.collection("ejercicios").document(doc_id).set(meta, merge=True)
 
 @st.cache_data(show_spinner=False)
-def cargar_ejercicios():
+def _cargar_ejercicios_cached(correo_usuario: str, rol: str):
     db = get_db()
-    correo_usuario = (st.session_state.get("correo") or "").strip().lower()
-    rol = (st.session_state.get("rol") or "").strip()
-    es_admin = rol in ADMIN_ROLES
+    correo_usuario = (correo_usuario or "").strip().lower()
+    rol = (rol or "").strip()
+    rol_lower = rol.lower()
+    es_admin = rol_lower in {r.lower() for r in ADMIN_ROLES}
+    empresa_usuario = empresa_de_usuario(correo_usuario) if correo_usuario else ""
 
     def _store(target: dict[str, dict], data: dict) -> None:
         nombre = (data.get("nombre") or "").strip()
@@ -270,24 +277,76 @@ def cargar_ejercicios():
                     continue
                 _store(ejercicios_por_nombre, doc.to_dict() or {})
         else:
+            empresa_cache: dict[str, str] = {}
+
+            def _empresa_de_creador(correo_creador: str) -> str:
+                correo_creador = (correo_creador or "").strip().lower()
+                if not correo_creador:
+                    return ""
+                if correo_creador not in empresa_cache:
+                    try:
+                        empresa_cache[correo_creador] = empresa_de_usuario(correo_creador)
+                    except Exception:
+                        empresa_cache[correo_creador] = ""
+                return empresa_cache[correo_creador]
+
             publicos: dict[str, dict] = {}
             personales: dict[str, dict] = {}
-            for doc in db.collection("ejercicios").where("publico", "==", True).stream():
-                if not doc.exists:
-                    continue
-                _store(publicos, doc.to_dict() or {})
-            if correo_usuario:
-                for doc in db.collection("ejercicios").where("entrenador", "==", correo_usuario).stream():
+            compartidos: dict[str, dict] = {}
+
+            if empresa_usuario == EMPRESA_MOTION:
+                for doc in db.collection("ejercicios").stream():
                     if not doc.exists:
                         continue
                     data = doc.to_dict() or {}
-                    _store(personales, data)
-                    publicos.pop((data.get("nombre") or "").strip(), None)
-            ejercicios_por_nombre.update(publicos)
-            ejercicios_por_nombre.update(personales)
+                    if not data:
+                        continue
+                    nombre = (data.get("nombre") or "").strip()
+                    if not nombre:
+                        continue
+                    es_publico = bool(data.get("publico"))
+                    creador = (data.get("entrenador") or "").strip().lower()
+
+                    if es_publico:
+                        _store(publicos, data)
+                        continue
+
+                    if creador and creador == correo_usuario:
+                        _store(personales, data)
+                        continue
+
+                    empresa_doc = (data.get("empresa_propietaria") or "").strip().lower()
+                    if not empresa_doc:
+                        empresa_doc = _empresa_de_creador(creador)
+
+                    if empresa_doc == EMPRESA_MOTION:
+                        _store(compartidos, data)
+                ejercicios_por_nombre.update(publicos)
+                ejercicios_por_nombre.update(compartidos)
+                ejercicios_por_nombre.update(personales)
+            else:
+                for doc in db.collection("ejercicios").where("publico", "==", True).stream():
+                    if not doc.exists:
+                        continue
+                    _store(publicos, doc.to_dict() or {})
+                if correo_usuario:
+                    for doc in db.collection("ejercicios").where("entrenador", "==", correo_usuario).stream():
+                        if not doc.exists:
+                            continue
+                        data = doc.to_dict() or {}
+                        _store(personales, data)
+                        publicos.pop((data.get("nombre") or "").strip(), None)
+                ejercicios_por_nombre.update(publicos)
+                ejercicios_por_nombre.update(personales)
     except Exception as e:
         st.error(f"Error cargando ejercicios: {e}")
     return ejercicios_por_nombre
+
+
+def cargar_ejercicios():
+    correo_usuario = (st.session_state.get("correo") or "").strip().lower()
+    rol = (st.session_state.get("rol") or "").strip()
+    return _cargar_ejercicios_cached(correo_usuario, rol)
 
 @st.cache_data(show_spinner=False)
 def cargar_usuarios():
@@ -840,15 +899,56 @@ def crear_rutinas():
 
     BASE_HEADERS = [
     "Circuito", "Buscar Ejercicio", "Ejercicio", "Detalle",
-    "Series", "Repeticiones", "Peso", "RIR (Min/Max)", "Progresión", "Copiar", "Video?"
+    "Series", "Repeticiones", "Peso", "RIR (Min/Max)", "Progresión", "Copiar", "Video?", "Borrar"
     ]
-    BASE_SIZES = [1, 2.5, 2.5, 2.0, 0.7, 1.4, 1.0, 1.4, 1.0, 0.6, 0.6]  
+    BASE_SIZES = [1, 2.5, 2.5, 2.0, 0.7, 1.4, 1.0, 1.4, 1.0, 0.6, 0.6, 0.6]  
     # 👆 aquí puse 1.6 en RIR para que quepan dos casillas
 
     columnas_tabla = [
         "Circuito", "Sección", "Ejercicio", "Detalle", "Series", "Repeticiones",
         "Peso", "Tiempo", "Velocidad", "Descanso", "RIR", "Tipo", "Video"
     ]
+
+    def _reset_fila(key_seccion: str, fila_idx: int, seccion_actual: str, key_entrenamiento: str) -> None:
+        filas_sec = st.session_state.get(key_seccion)
+        if not isinstance(filas_sec, list) or not (0 <= fila_idx < len(filas_sec)):
+            return
+
+        fila_vacia = {k: "" for k in columnas_tabla}
+        fila_vacia["Sección"] = seccion_actual
+        fila_vacia["Circuito"] = clamp_circuito_por_seccion("", seccion_actual)
+        fila_vacia["BuscarEjercicio"] = ""
+        fila_vacia["Ejercicio"] = ""
+        fila_vacia["RepsMin"] = ""
+        fila_vacia["RepsMax"] = ""
+        fila_vacia["RirMin"] = ""
+        fila_vacia["RirMax"] = ""
+        fila_vacia["Video"] = ""
+        fila_vacia["_exact_on_load"] = False
+        filas_sec[fila_idx] = fila_vacia
+
+        prefixes = [
+            "circ", "buscar", "select", "det", "ser", "rmin",
+            "rmax", "peso", "tiempo", "vel", "desc", "rirmin",
+            "rirmax"
+        ]
+        for pref in prefixes:
+            st.session_state.pop(f"{pref}_{key_entrenamiento}", None)
+
+        for p in (1, 2, 3):
+            st.session_state.pop(f"var{p}_{key_entrenamiento}_{fila_idx}", None)
+            st.session_state.pop(f"cant{p}_{key_entrenamiento}_{fila_idx}", None)
+            st.session_state.pop(f"ope{p}_{key_entrenamiento}_{fila_idx}", None)
+            st.session_state.pop(f"sem{p}_{key_entrenamiento}_{fila_idx}", None)
+            st.session_state.pop(f"condvar{p}_{key_entrenamiento}_{fila_idx}", None)
+            st.session_state.pop(f"condop{p}_{key_entrenamiento}_{fila_idx}", None)
+            st.session_state.pop(f"condval{p}_{key_entrenamiento}_{fila_idx}", None)
+
+        st.session_state.pop(f"prog_check_{key_entrenamiento}_{fila_idx}", None)
+        st.session_state.pop(f"copy_check_{key_entrenamiento}_{fila_idx}", None)
+        st.session_state.pop(f"multiselect_{key_entrenamiento}_{fila_idx}", None)
+        st.session_state.pop(f"do_copy_{key_entrenamiento}_{fila_idx}", None)
+        st.session_state.pop(f"delete_{key_entrenamiento}_{fila_idx}", None)
 
     progresion_activa = st.radio("Progresión activa", ["Progresión 1", "Progresión 2", "Progresión 3"],
                                  horizontal=True, index=0)
@@ -1118,6 +1218,7 @@ def crear_rutinas():
                         c.markdown(f"<div class='header-center'>{title}</div>", unsafe_allow_html=True)
 
                     # ------ Render filas ------
+                    filas_marcadas_para_borrar: list[tuple[int, str]] = []
                     for idx, fila in enumerate(st.session_state[key_seccion]):
                         key_entrenamiento = f"{i}_{seccion.replace(' ','_')}_{idx}"
                         cols = st.columns(sizes)
@@ -1318,6 +1419,14 @@ def crear_rutinas():
                         copy_cell = cols[pos["Copiar"]].columns([1, 1, 1])
                         mostrar_copia = copy_cell[1].checkbox("", key=f"copy_check_{key_entrenamiento}_{idx}")
 
+                        borrar_key = f"delete_{key_entrenamiento}_{idx}"
+                        marcado_borrar = cols[pos["Borrar"]].checkbox("", key=borrar_key)
+                        if marcado_borrar:
+                            filas_marcadas_para_borrar.append((idx, key_entrenamiento))
+                            fila["_delete_marked"] = True
+                        else:
+                            fila.pop("_delete_marked", None)
+
                         # ===== Indicador de Video (✅ / ❌) al final =====
                         # ===== Indicador de Video (checkbox deshabilitado) =====
                         # esto va dentro del loop de filas, DESPUÉS de actualizar fila["Ejercicio"] / fila["Video"]
@@ -1413,7 +1522,13 @@ def crear_rutinas():
                     pending_key = f"pending_clear_{key_seccion}"
 
                     if limpiar_clicked:
-                        if st.session_state.get(pending_key):
+                        if filas_marcadas_para_borrar:
+                            for idx_sel, key_sel in filas_marcadas_para_borrar:
+                                _reset_fila(key_seccion, idx_sel, seccion, key_sel)
+                            st.session_state.pop(pending_key, None)
+                            st.success("Fila(s) limpiadas ✅")
+                            st.rerun()
+                        elif st.session_state.get(pending_key):
                             fila_vacia = {k: "" for k in columnas_tabla}
                             fila_vacia["Sección"] = seccion
                             fila_vacia["Circuito"] = clamp_circuito_por_seccion(fila_vacia.get("Circuito","") or "", seccion)
@@ -1423,7 +1538,12 @@ def crear_rutinas():
 
                             prefix = f"{i}_{seccion.replace(' ','_')}_"
                             for key in list(st.session_state.keys()):
-                                if key.startswith(f"multiselect_{prefix}") or key.startswith(f"do_copy_{prefix}"):
+                                if (
+                                    key.startswith(f"multiselect_{prefix}")
+                                    or key.startswith(f"do_copy_{prefix}")
+                                    or key.startswith(f"delete_{prefix}")
+                                    or key.startswith(f"copy_check_{prefix}")
+                                ):
                                     st.session_state.pop(key, None)
                             st.session_state.pop(pending_key, None)
                             st.success("Sección limpiada ✅")
@@ -1431,8 +1551,10 @@ def crear_rutinas():
                         else:
                             st.session_state[pending_key] = True
 
-                    if st.session_state.get(pending_key):
+                    if st.session_state.get(pending_key) and not filas_marcadas_para_borrar:
                         st.warning("Vuelve a presionar **Limpiar sección** para confirmar el borrado.")
+                    elif filas_marcadas_para_borrar:
+                        st.session_state.pop(pending_key, None)
 
                     if submitted:
                         st.session_state.pop(pending_key, None)

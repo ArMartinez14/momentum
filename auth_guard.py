@@ -23,17 +23,22 @@ def verify_id_token(id_token: str) -> Optional[dict]:
     except Exception:
         return None
 
-def fetch_user_role(email: str) -> str:
-    """Lee el rol desde tu colección 'usuarios' (si existe)."""
+def fetch_user_doc(email: str) -> Optional[dict]:
+    """Devuelve el documento de usuario desde Firestore (o None si no existe)."""
     try:
         doc_id = _normalizar_id(email)
         snap = _db.collection("usuarios").document(doc_id).get()
-        if snap.exists:
-            data = snap.to_dict() or {}
-            return (data.get("rol") or "").strip()
+        if not snap.exists:
+            return None
+        return snap.to_dict() or {}
     except Exception:
-        pass
-    return ""
+        return None
+
+
+def fetch_user_role(email: str) -> str:
+    """Compatibilidad: extrae solo el rol del documento del usuario."""
+    data = fetch_user_doc(email) or {}
+    return (data.get("rol") or "").strip()
 
 def ensure_user_session(id_token: str) -> bool:
     decoded = verify_id_token(id_token)
@@ -42,6 +47,16 @@ def ensure_user_session(id_token: str) -> bool:
 
     email = (decoded.get("email") or "").lower()
     if not email:
+        return False
+
+    user_doc = fetch_user_doc(email) or {}
+    is_active = False if user_doc.get("activo") is False else True
+    if not is_active:
+        st.session_state["auth_error"] = "Tu cuenta está desactivada. Contacta al administrador."
+        st.session_state["auth_clear_cookie"] = True
+        st.session_state.pop("user", None)
+        st.session_state.pop("correo", None)
+        st.session_state.pop("rol", None)
         return False
 
     # Rellena session_state
@@ -57,7 +72,9 @@ def ensure_user_session(id_token: str) -> bool:
     st.session_state["correo"] = email
 
     # Rol desde tu colección (opcional)
-    if "rol" not in st.session_state or not st.session_state["rol"]:
+    if user_doc.get("rol"):
+        st.session_state["rol"] = (user_doc.get("rol") or "").strip()
+    elif "rol" not in st.session_state or not st.session_state["rol"]:
         st.session_state["rol"] = fetch_user_role(email)
 
     return True
