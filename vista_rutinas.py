@@ -14,15 +14,10 @@ from app_core.theme import inject_theme
 from app_core.utils import empresa_de_usuario, EMPRESA_MOTION, EMPRESA_ASESORIA, EMPRESA_DESCONOCIDA
 
 
-_QUERY_API_MODE: str | None = None  # "new" | "legacy"
-
-
 def _current_query_params() -> dict[str, str]:
-    global _QUERY_API_MODE
-
-    def _from_items(items):
+    try:
         out: dict[str, str] = {}
-        for key, value in items:
+        for key, value in st.query_params.items():
             if isinstance(value, list):
                 if not value:
                     continue
@@ -30,50 +25,17 @@ def _current_query_params() -> dict[str, str]:
             elif value is not None:
                 out[key] = str(value)
         return out
-
-    if _QUERY_API_MODE == "legacy":
-        try:
-            return _from_items(st.experimental_get_query_params().items())
-        except Exception:
-            return {}
-
-    try:
-        items = st.query_params.items()
-        _QUERY_API_MODE = "new"
-        return _from_items(items)
-    except StreamlitAPIException:
-        _QUERY_API_MODE = "legacy"
-        return _current_query_params()
     except Exception:
         return {}
 
 
 def _replace_query_params(params: dict[str, str | None]) -> None:
-    global _QUERY_API_MODE
-
     clean = {k: str(v) for k, v in params.items() if v is not None}
-    if _current_query_params() == clean:
-        return
-
-    if _QUERY_API_MODE == "legacy":
-        try:
-            st.experimental_set_query_params(**clean)
-        except Exception:
-            pass
-        return
-
     try:
         qp = st.query_params
         qp.clear()
         if clean:
             qp.update(clean)
-        _QUERY_API_MODE = "new"
-    except StreamlitAPIException:
-        _QUERY_API_MODE = "legacy"
-        try:
-            st.experimental_set_query_params(**clean)
-        except Exception:
-            pass
     except Exception:
         pass
 
@@ -936,6 +898,18 @@ def ver_rutinas():
                     if coach_resp_cli == correo_raw:
                         clientes_tarjetas.append(nombre_cli)
                 clientes_tarjetas = sorted(set(clientes_tarjetas))
+            elif es_motion_entrenador:
+                clientes_tarjetas = []
+                for r in rutinas_all:
+                    nombre_cli = (r.get("cliente") or "").strip()
+                    if not nombre_cli:
+                        continue
+                    correo_cli = (r.get("correo") or "").strip().lower()
+                    datos_cli = usuarios_por_correo.get(correo_cli) or usuarios_por_correo.get(normalizar_correo(correo_cli)) or {}
+                    coach_resp_cli = (datos_cli.get("coach_responsable") or "").strip().lower()
+                    if coach_resp_cli == correo_raw:
+                        clientes_tarjetas.append(nombre_cli)
+                clientes_tarjetas = sorted(set(clientes_tarjetas))
             else:
                 clientes_tarjetas = []
                 for r in rutinas_all:
@@ -947,23 +921,25 @@ def ver_rutinas():
                     correo_cli = (r.get("correo") or "").strip().lower()
                     datos_cli = usuarios_por_correo.get(correo_cli) or usuarios_por_correo.get(normalizar_correo(correo_cli)) or {}
                     coach_resp_cli = (datos_cli.get("coach_responsable") or "").strip().lower()
-                    empresa_cli = empresa_de_usuario(correo_cli, usuarios_por_correo) if correo_cli else ""
-                    if es_motion_entrenador:
-                        if (
-                            entrenador_reg in correos_entrenador
-                            or entrenador_reg_norm in correos_entrenador
-                            or coach_resp_cli == correo_raw
-                            or empresa_cli in {EMPRESA_MOTION, EMPRESA_DESCONOCIDA}
-                        ):
-                            clientes_tarjetas.append(nombre_cli)
-                    else:
-                        if (
-                            entrenador_reg in correos_entrenador
-                            or entrenador_reg_norm in correos_entrenador
-                            or coach_resp_cli == correo_raw
-                        ):
-                            clientes_tarjetas.append(nombre_cli)
+                    if (
+                        entrenador_reg in correos_entrenador
+                        or entrenador_reg_norm in correos_entrenador
+                        or coach_resp_cli == correo_raw
+                    ):
+                        clientes_tarjetas.append(nombre_cli)
                 clientes_tarjetas = sorted(set(clientes_tarjetas))
+        elif rol_lower in ("admin", "administrador") and es_motion_entrenador:
+            clientes_tarjetas = []
+            for r in rutinas_all:
+                nombre_cli = (r.get("cliente") or "").strip()
+                if not nombre_cli:
+                    continue
+                correo_cli = (r.get("correo") or "").strip().lower()
+                datos_cli = usuarios_por_correo.get(correo_cli) or usuarios_por_correo.get(normalizar_correo(correo_cli)) or {}
+                coach_resp_cli = (datos_cli.get("coach_responsable") or "").strip().lower()
+                if coach_resp_cli == correo_raw:
+                    clientes_tarjetas.append(nombre_cli)
+            clientes_tarjetas = sorted(set(clientes_tarjetas))
         else:
             clientes_tarjetas = sorted(clientes_empresa_info.keys())
 
@@ -974,7 +950,12 @@ def ver_rutinas():
         busqueda_lower = busqueda.lower()
         clientes_asignados = clientes_tarjetas
 
-        base_lista = clientes_tarjetas if clientes_tarjetas else sorted(clientes_empresa_info.keys())
+        if clientes_tarjetas:
+            base_lista = clientes_tarjetas
+        elif es_motion_entrenador and rol_lower in ("entrenador", "admin", "administrador"):
+            base_lista = []
+        else:
+            base_lista = sorted(clientes_empresa_info.keys())
 
         if busqueda_lower:
             candidatos = [
@@ -1056,6 +1037,7 @@ def ver_rutinas():
                 )
             if st.button("Cambiar deportista", key="volver_lista_clientes", type="secondary", use_container_width=True):
                 st.session_state["_mostrar_lista_clientes"] = True
+                st.session_state.pop("_cliente_sel", None)
                 st.session_state.pop("dia_sel", None)
                 _sync_rutinas_query_params()
                 st.rerun()

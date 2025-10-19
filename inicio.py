@@ -218,25 +218,13 @@ def _primero_pendiente(doc: dict) -> str | None:
     return None
 
 def _set_query_params(**params: str | None):
-    """Compatibilidad con Streamlit para limpiar/actualizar los query params."""
-    params = {k: v for k, v in params.items() if v is not None}
-    qp = None
+    """Actualiza los query params usando la API moderna de Streamlit."""
     try:
         qp = st.query_params
-    except Exception:
-        qp = None
-
-    if qp is not None:
-        try:
-            qp.clear()
-            if params:
-                qp.update(params)
-            return
-        except Exception:
-            pass
-
-    try:
-        st.experimental_set_query_params(**params)
+        qp.clear()
+        clean = {k: v for k, v in params.items() if v is not None}
+        if clean:
+            qp.update(clean)
     except Exception:
         pass
 
@@ -408,18 +396,6 @@ def inicio_deportista():
             """,
             unsafe_allow_html=True
         )
-
-        # 2) Acciones según rol (primero el menú)
-        acciones = _acciones_para_rol(rol)
-        if acciones:
-            st.markdown("### 🛠️ Tus herramientas")
-            cols = st.columns(3, gap="large")
-            for idx, accion in enumerate(acciones):
-                col = cols[idx % len(cols)]
-                with col:
-                    etiqueta = f"{accion['label']}"
-                    if st.button(etiqueta, key=f"accion_{accion['id']}", help=accion.get("help"), use_container_width=True, type="secondary"):
-                        accion["callback"]()
 
         st.markdown("---")
 
