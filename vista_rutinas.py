@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import streamlit as st
+from streamlit.errors import StreamlitAPIException
 from firebase_admin import firestore
 from datetime import datetime, timedelta, date
 import json, random, re, math, html
@@ -10,7 +11,82 @@ import matplotlib.pyplot as plt
 import time
 from app_core.firebase_client import get_db
 from app_core.theme import inject_theme
-from app_core.utils import empresa_de_usuario, EMPRESA_MOTION, EMPRESA_ASESORIA
+from app_core.utils import empresa_de_usuario, EMPRESA_MOTION, EMPRESA_ASESORIA, EMPRESA_DESCONOCIDA
+
+
+_QUERY_API_MODE: str | None = None  # "new" | "legacy"
+
+
+def _current_query_params() -> dict[str, str]:
+    global _QUERY_API_MODE
+
+    def _from_items(items):
+        out: dict[str, str] = {}
+        for key, value in items:
+            if isinstance(value, list):
+                if not value:
+                    continue
+                out[key] = value[0]
+            elif value is not None:
+                out[key] = str(value)
+        return out
+
+    if _QUERY_API_MODE == "legacy":
+        try:
+            return _from_items(st.experimental_get_query_params().items())
+        except Exception:
+            return {}
+
+    try:
+        items = st.query_params.items()
+        _QUERY_API_MODE = "new"
+        return _from_items(items)
+    except StreamlitAPIException:
+        _QUERY_API_MODE = "legacy"
+        return _current_query_params()
+    except Exception:
+        return {}
+
+
+def _replace_query_params(params: dict[str, str | None]) -> None:
+    global _QUERY_API_MODE
+
+    clean = {k: str(v) for k, v in params.items() if v is not None}
+    if _current_query_params() == clean:
+        return
+
+    if _QUERY_API_MODE == "legacy":
+        try:
+            st.experimental_set_query_params(**clean)
+        except Exception:
+            pass
+        return
+
+    try:
+        qp = st.query_params
+        qp.clear()
+        if clean:
+            qp.update(clean)
+        _QUERY_API_MODE = "new"
+    except StreamlitAPIException:
+        _QUERY_API_MODE = "legacy"
+        try:
+            st.experimental_set_query_params(**clean)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _sync_rutinas_query_params(cliente: str | None = None, semana: str | None = None, dia: str | None = None) -> None:
+    payload = {"menu": "Ver Rutinas"}
+    if cliente:
+        payload["cliente"] = cliente
+    if semana:
+        payload["semana"] = semana
+    if dia:
+        payload["dia"] = str(dia)
+    _replace_query_params(payload)
 
 # ==========================
 #  PALETA / ESTILOS con soporte claro/oscuro
@@ -620,6 +696,30 @@ def guardar_reporte_ejercicio(db, correo_cliente_norm, correo_original, semana_s
 
     return True
 
+
+def marcar_dia_como_finalizado(db, correo_cliente_norm, semana_sel, dia_sel, correo_actor, rpe_valor=None):
+    dia_sel = str(dia_sel)
+    fecha_norm = semana_sel.replace("-", "_")
+    doc_id = f"{correo_cliente_norm}_{fecha_norm}"
+    doc_ref = db.collection("rutinas_semanales").document(doc_id)
+
+    updates = {
+        "rutina": {
+            f"{dia_sel}_finalizado": True,
+            f"{dia_sel}_finalizado_por": correo_actor,
+            f"{dia_sel}_finalizado_en": firestore.SERVER_TIMESTAMP,
+        }
+    }
+    if rpe_valor is not None:
+        updates["rutina"][f"{dia_sel}_rpe"] = float(rpe_valor)
+
+    try:
+        doc_ref.set(updates, merge=True)
+    except Exception:
+        return False
+    return True
+
+
 def guardar_reportes_del_dia(db, correo_cliente_norm, correo_original, semana_sel, dia_sel, ejercicios, correo_actor, rpe_valor, bloque_rutina=None):
     dia_sel = str(dia_sel)
     fecha_norm = semana_sel.replace("-", "_")
@@ -652,12 +752,14 @@ def guardar_reportes_del_dia(db, correo_cliente_norm, correo_original, semana_se
             bloque_rutina=bloque_rutina,
         )
         if not ok: return False
-    updates = {"rutina": {f"{dia_sel}_finalizado": True,
-                          f"{dia_sel}_finalizado_por": correo_actor,
-                          f"{dia_sel}_finalizado_en": firestore.SERVER_TIMESTAMP}}
-    if rpe_valor is not None:
-        updates["rutina"][f"{dia_sel}_rpe"] = float(rpe_valor)
-    doc_ref.set(updates, merge=True); return True
+    return marcar_dia_como_finalizado(
+        db=db,
+        correo_cliente_norm=correo_cliente_norm,
+        semana_sel=semana_sel,
+        dia_sel=dia_sel,
+        correo_actor=correo_actor,
+        rpe_valor=rpe_valor,
+    )
 
 # ==========================
 #  PNG Resumen (no se toca)
@@ -732,6 +834,11 @@ def ver_rutinas():
     rutinas_all = cargar_todas_las_rutinas()
     if not rutinas_all: st.warning("⚠️ No se encontraron rutinas."); st.stop()
 
+    qp_values = _current_query_params()
+    qp_cliente = qp_values.get("cliente")
+    qp_semana = qp_values.get("semana")
+    qp_dia = qp_values.get("dia")
+
     cliente_sel = None
     if es_entrenador(rol):
         rol_lower = rol.strip().lower()
@@ -771,6 +878,7 @@ def ver_rutinas():
             responsable = (datos_cli.get("coach_responsable") or "").strip().lower() if datos_cli else ""
             entrenador_reg = (rutina_doc.get("entrenador") or "").strip().lower()
             entrenador_reg_norm = normalizar_correo(rutina_doc.get("entrenador") or "")
+            empresa_cli = empresa_de_usuario(correo_cliente, usuarios_por_correo) if correo_cliente else ""
 
             if es_asesoria_entrenador:
                 return responsable == correo_raw
@@ -778,7 +886,9 @@ def ver_rutinas():
             if es_motion_entrenador:
                 if entrenador_reg in correos_entrenador or entrenador_reg_norm in correos_entrenador:
                     return True
-                if correo_cliente and empresa_de_usuario(correo_cliente, usuarios_por_correo) == EMPRESA_MOTION:
+                if correo_cliente and empresa_cli in {EMPRESA_MOTION, EMPRESA_DESCONOCIDA}:
+                    return True
+                if responsable and responsable == correo_raw:
                     return True
                 return False
 
@@ -801,7 +911,11 @@ def ver_rutinas():
                 if es_asesoria_entrenador:
                     permitido = permitido and ((usuarios_por_correo.get(correo_cli) or {}).get("coach_responsable", "").strip().lower() == correo_raw)
                 elif es_motion_entrenador:
-                    permitido = permitido or (correo_cli and empresa_de_usuario(correo_cli, usuarios_por_correo) == EMPRESA_MOTION)
+                    empresa_cli = empresa_de_usuario(correo_cli, usuarios_por_correo) if correo_cli else ""
+                    permitido = permitido or (
+                        correo_cli
+                        and empresa_cli in {EMPRESA_MOTION, EMPRESA_DESCONOCIDA}
+                    )
             if permitido:
                 clientes_empresa_info.setdefault(nombre_cli, set())
                 if correo_cli:
@@ -830,8 +944,25 @@ def ver_rutinas():
                         continue
                     entrenador_reg = (r.get("entrenador") or "").strip().lower()
                     entrenador_reg_norm = normalizar_correo(r.get("entrenador") or "")
-                    if entrenador_reg in correos_entrenador or entrenador_reg_norm in correos_entrenador:
-                        clientes_tarjetas.append(nombre_cli)
+                    correo_cli = (r.get("correo") or "").strip().lower()
+                    datos_cli = usuarios_por_correo.get(correo_cli) or usuarios_por_correo.get(normalizar_correo(correo_cli)) or {}
+                    coach_resp_cli = (datos_cli.get("coach_responsable") or "").strip().lower()
+                    empresa_cli = empresa_de_usuario(correo_cli, usuarios_por_correo) if correo_cli else ""
+                    if es_motion_entrenador:
+                        if (
+                            entrenador_reg in correos_entrenador
+                            or entrenador_reg_norm in correos_entrenador
+                            or coach_resp_cli == correo_raw
+                            or empresa_cli in {EMPRESA_MOTION, EMPRESA_DESCONOCIDA}
+                        ):
+                            clientes_tarjetas.append(nombre_cli)
+                    else:
+                        if (
+                            entrenador_reg in correos_entrenador
+                            or entrenador_reg_norm in correos_entrenador
+                            or coach_resp_cli == correo_raw
+                        ):
+                            clientes_tarjetas.append(nombre_cli)
                 clientes_tarjetas = sorted(set(clientes_tarjetas))
         else:
             clientes_tarjetas = sorted(clientes_empresa_info.keys())
@@ -864,6 +995,10 @@ def ver_rutinas():
         if busqueda:
             st.session_state["_mostrar_lista_clientes"] = True
 
+        if not st.session_state.get("_cliente_sel") and qp_cliente and qp_cliente in clientes_empresa_info:
+            st.session_state["_cliente_sel"] = qp_cliente
+            st.session_state["_mostrar_lista_clientes"] = False
+
         mostrar_lista = st.session_state.get("_mostrar_lista_clientes", True)
         cliente_sel = st.session_state.get("_cliente_sel")
 
@@ -894,19 +1029,35 @@ def ver_rutinas():
                             st.session_state["_mostrar_lista_clientes"] = False
                             st.session_state.pop("semana_sel", None)
                             st.session_state.pop("dia_sel", None)
+                            _sync_rutinas_query_params(cliente_nombre)
                             st.rerun()
         else:
-            st.markdown(
-                f"""
-                <div class='card' style='border: 1.5px solid var(--primary); padding:14px; display:flex; flex-direction:column; gap:6px;'>
-                  <div style='font-weight:700; font-size:1.05rem;'>{cliente_sel}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            if rol in ("entrenador", "admin", "administrador"):
+                st.markdown(
+                    f"""
+                    <div class='client-sticky'>
+                      <div class='client-sticky__label'>Deportista seleccionado</div>
+                      <div class='client-sticky__value'>
+                        {cliente_sel}
+                        <span class='client-sticky__badge'>Rutina activa</span>
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f"""
+                    <div class='card' style='border: 1.5px solid var(--primary); padding:14px; display:flex; flex-direction:column; gap:6px;'>
+                      <div style='font-weight:700; font-size:1.05rem;'>{cliente_sel}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
             if st.button("Cambiar deportista", key="volver_lista_clientes", type="secondary", use_container_width=True):
                 st.session_state["_mostrar_lista_clientes"] = True
                 st.session_state.pop("dia_sel", None)
+                _sync_rutinas_query_params()
                 st.rerun()
 
         cliente_sel = st.session_state.get("_cliente_sel")
@@ -933,10 +1084,6 @@ def ver_rutinas():
         st.stop()
 
     # --- Antes de construir el selectbox de Semana, lee los query params ---
-    qp_semana = st.query_params.get("semana", [None])
-    qp_semana = qp_semana[0] if isinstance(qp_semana, list) else qp_semana
-    qp_dia    = st.query_params.get("dia", [None])
-    qp_dia    = (qp_dia[0] if isinstance(qp_dia, list) else qp_dia)
     seeded_from_qs = False
 
     # Semana (desde rutinas_cliente)
@@ -1047,8 +1194,7 @@ def ver_rutinas():
             st.markdown("<div style='display:flex; justify-content:flex-end;'>", unsafe_allow_html=True)
             if st.button("Cambiar día", key=f"cambiar_{semana_sel}_{dia_actual}", type="secondary"):
                 st.session_state.pop("dia_sel", None)
-                st.query_params.clear()
-                st.query_params.update({"semana": semana_sel})
+                _sync_rutinas_query_params(cliente_sel, semana_sel)
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
         else:
@@ -1081,7 +1227,7 @@ def ver_rutinas():
                                 use_container_width=True, help=f"Ver rutina del día {dia}"):
                         st.session_state["dia_sel"] = str(dia)
                         # sincroniza la URL para persistencia (sobrevive reload/bloqueo)
-                        st.query_params.update({"semana": semana_sel, "dia": str(dia)})
+                        _sync_rutinas_query_params(cliente_sel, semana_sel, str(dia))
                         st.rerun()
 
 
@@ -1093,6 +1239,8 @@ def ver_rutinas():
     if not dia_sel and qp_dia:
         dia_sel = str(qp_dia)
         st.session_state["dia_sel"] = dia_sel
+
+    _sync_rutinas_query_params(cliente_sel, semana_sel, dia_sel)
 
     if not dia_sel:
         st.info("Selecciona un día en las tarjetas superiores para ver tu rutina.")
@@ -1293,6 +1441,12 @@ def ver_rutinas():
                         if reps_alc is not None: e["reps_alcanzadas"] = reps_alc
                         if rir_alc  is not None: e["rir_alcanzado"]  = rir_alc
 
+                        tiene_metricas = any([
+                            peso_alc is not None,
+                            reps_alc is not None,
+                            rir_alc  is not None,
+                        ])
+
                         hay_input = any([
                             (e.get("comentario", "") or "").strip(),
                             peso_alc is not None,
@@ -1315,6 +1469,15 @@ def ver_rutinas():
                             bloque_rutina=rutina_doc.get("bloque_rutina"),
                         )
                         if ok:
+                            if tiene_metricas:
+                                marcar_dia_como_finalizado(
+                                    db=db,
+                                    correo_cliente_norm=normalizar_correo(rutina_doc.get("correo","")),
+                                    semana_sel=semana_sel,
+                                    dia_sel=str(dia_sel),
+                                    correo_actor=st.session_state.get("correo", ""),
+                                    rpe_valor=None,
+                                )
                             st.success("✅ Reporte guardado.")
                             st.cache_data.clear()
                             st.rerun()

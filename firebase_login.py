@@ -39,14 +39,33 @@ def firebase_login_ui(cookie_name: str = "fb_idtoken", height: int = 560):
           const auth = firebase.auth();
 
           // Helpers
+          async function ensureStorageAccess() {{
+            if (!document.hasStorageAccess) {{
+              return;
+            }}
+            try {{
+              const hasAccess = await document.hasStorageAccess();
+              if (!hasAccess) {{
+                await document.requestStorageAccess();
+              }}
+            }} catch (err) {{
+              console.warn("Storage access request was rejected", err);
+            }}
+          }}
+
           function setCookie(name, value, days) {{
             const d = new Date();
             d.setTime(d.getTime() + (days*24*60*60*1000));
-            const expires = "expires="+ d.toUTCString();
-            document.cookie = name + "=" + (value || "") + ";" + expires + ";path=/";
+            const expires = "expires=" + d.toUTCString();
+            const isHttps = window.location.protocol === "https:";
+            const sameSite = isHttps ? "SameSite=None" : "SameSite=Lax";
+            const secureAttr = isHttps ? ";Secure" : "";
+            document.cookie = `${{name}}=${{value || ""}};${{expires}};path=/;${{sameSite}}${{secureAttr}}`;
           }}
-          function postTokenToParent(idToken) {{
-            setCookie("{cookie_name}", idToken, 1); // 1 día; el SDK lo reescribe al renovar
+
+          async function postTokenToParent(idToken, rememberSevenDays = true) {{
+            await ensureStorageAccess();
+            setCookie("{cookie_name}", idToken, rememberSevenDays ? 7 : 1);
             if (window.parent) {{
               window.parent.postMessage({{ type: "fb_idtoken", token: idToken }}, "*");
             }}

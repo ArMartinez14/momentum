@@ -58,12 +58,21 @@ def _rirstr(e: dict) -> str:
       - valor 'legacy' si viene como texto único en e['rir'] / e['RIR'] / e['Rir']
       - "" si no hay datos
     """
-    # 1) Nuevos campos con rango
-    rmin = e.get("RirMin") or e.get("rir_min") or e.get("RIR_min")
-    rmax = e.get("RirMax") or e.get("rir_max") or e.get("RIR_max")
+    # 1) Nuevos campos con rango (preservando valores 0)
+    def _pick(*valores):
+        for v in valores:
+            if v is None:
+                continue
+            if isinstance(v, str) and v.strip() == "":
+                continue
+            return v
+        return None
 
-    rmin_s = str(rmin).strip() if rmin not in (None, "") else ""
-    rmax_s = str(rmax).strip() if rmax not in (None, "") else ""
+    rmin = _pick(e.get("RirMin"), e.get("rir_min"), e.get("RIR_min"))
+    rmax = _pick(e.get("RirMax"), e.get("rir_max"), e.get("RIR_max"))
+
+    rmin_s = str(rmin).strip() if rmin is not None else ""
+    rmax_s = str(rmax).strip() if rmax is not None else ""
 
     if rmin_s and rmax_s:
         return f"{rmin_s}–{rmax_s}"

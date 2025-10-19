@@ -74,9 +74,9 @@ COLUMNAS_TABLA = [
 ]
 
 CIRCUITOS = ["A","B","C","D","E","F","G","H","I","J","K","L"]
-COL_SIZES = [0.9, 2.0, 3.0, 2.0, 0.8, 1.6, 1.0, 0.8, 1.2, 0.8]
+COL_SIZES = [0.9, 2.0, 3.0, 2.0, 0.8, 1.6, 1.0, 0.8, 1.2, 0.8, 0.7]
 HEADERS   = ["Circuito", "Buscar Ejercicio", "Ejercicio", "Detalle",
-             "Series", "Repeticiones", "Peso", "RIR", "Progresión", "Copiar"]
+             "Series", "Repeticiones", "Peso", "RIR", "Progresión", "Copiar", "Limpiar"]
 
 # ===================== 🔄 DÍAS =====================
 def claves_dias(rutina_dict: dict) -> list[str]:
@@ -158,6 +158,29 @@ def _fila_vacia(seccion: str) -> dict:
     base["Sección"] = seccion
     return base
 
+
+def _reset_fila_en_section(key_seccion: str, fila_idx: int, seccion: str, key_entrenamiento: str) -> None:
+    filas = st.session_state.get(key_seccion)
+    if not isinstance(filas, list) or not (0 <= fila_idx < len(filas)):
+        return
+
+    filas[fila_idx] = _fila_vacia(seccion)
+
+    for pref in ("circ", "buscar", "select", "det", "ser", "rmin", "rmax", "peso", "rir"):
+        st.session_state.pop(f"{pref}_{key_entrenamiento}", None)
+
+    for p in (1, 2, 3):
+        st.session_state.pop(f"var{p}_{key_entrenamiento}_{fila_idx}", None)
+        st.session_state.pop(f"cant{p}_{key_entrenamiento}_{fila_idx}", None)
+        st.session_state.pop(f"ope{p}_{key_entrenamiento}_{fila_idx}", None)
+        st.session_state.pop(f"sem{p}_{key_entrenamiento}_{fila_idx}", None)
+
+    st.session_state.pop(f"prog_check_{key_entrenamiento}_{fila_idx}", None)
+    st.session_state.pop(f"copy_check_{key_entrenamiento}_{fila_idx}", None)
+    st.session_state.pop(f"multiselect_{key_entrenamiento}_{fila_idx}", None)
+    st.session_state.pop(f"do_copy_{key_entrenamiento}_{fila_idx}", None)
+    st.session_state.pop(f"delete_{key_entrenamiento}_{fila_idx}", None)
+
 def _asegurar_dia_en_session(idx_dia: int):
     wu_key = f"rutina_dia_{idx_dia}_Warm_Up"
     wo_key = f"rutina_dia_{idx_dia}_Work_Out"
@@ -170,14 +193,27 @@ def _asegurar_dia_en_session(idx_dia: int):
         if DEFAULT_WO_ROWS_NEW_DAY > 0:
             st.session_state[wo_key] = [_fila_vacia("Work Out") for _ in range(DEFAULT_WO_ROWS_NEW_DAY)]
 
+
+def _trigger_rerun():
+    rerun_fn = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+    if rerun_fn:
+        rerun_fn()
+
 def _agregar_dia():
-    dias = st.session_state.get("dias_editables", [])
-    nuevo_idx = (max([int(d) for d in dias]) + 1) if dias else 1
-    dias.append(str(nuevo_idx))
-    st.session_state["dias_editables"] = dias
+    dias_actuales = st.session_state.get("dias_editables")
+    if not dias_actuales:
+        existentes = [key.split("_")[2] for key in st.session_state.keys() if key.startswith("rutina_dia_") and "Warm_Up" in key]
+        dias_actuales = sorted({d for d in existentes if d.isdigit()}, key=lambda x: int(x))
+        if not dias_actuales:
+            dias_actuales = ["1"]
+
+    nuevas = list(dias_actuales)
+    nuevo_idx = (max(int(d) for d in nuevas) + 1) if nuevas else 1
+    nuevas.append(str(nuevo_idx))
+    st.session_state["dias_editables"] = nuevas
     _asegurar_dia_en_session(nuevo_idx)
-    try: st.rerun()
-    except AttributeError: st.experimental_rerun()
+    st.session_state["_dia_creado_msg"] = f"Día {nuevo_idx} agregado. Completa sus ejercicios y guarda los cambios."
+    _trigger_rerun()
 
 def limpiar_dia(idx_dia: int):
     for seccion in ["Warm Up", "Work Out"]:
@@ -232,6 +268,7 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
         return res
 
     with st.form(f"form_{key_seccion}", clear_on_submit=False):
+        filas_marcadas_para_borrar = []
         for idx, fila in enumerate(st.session_state[key_seccion]):
             key_entrenamiento = f"{i}_{seccion.replace(' ','_')}_{idx}"
             cols = st.columns(col_sizes)
@@ -388,6 +425,13 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                 st.session_state.pop(f"multiselect_{key_entrenamiento}_{idx}", None)
                 st.session_state.pop(f"do_copy_{key_entrenamiento}_{idx}", None)
 
+            borrar_key = f"delete_{key_entrenamiento}_{idx}"
+            marcado_para_borrar = cols[10].checkbox("", key=borrar_key)
+            if marcado_para_borrar:
+                filas_marcadas_para_borrar.append((idx, key_entrenamiento))
+            else:
+                st.session_state.pop(f"delete_{key_entrenamiento}_{idx}", None)
+
         action_cols = st.columns([1,5,1], gap="small")
         with action_cols[0]:
             submitted = st.form_submit_button("Actualizar sección", type="primary")
@@ -397,7 +441,13 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
         pending_key = f"pending_clear_{key_seccion}"
 
         if limpiar_clicked:
-            if st.session_state.get(pending_key):
+            if filas_marcadas_para_borrar:
+                for idx_sel, key_sel in filas_marcadas_para_borrar:
+                    _reset_fila_en_section(key_seccion, idx_sel, seccion, key_sel)
+                st.session_state.pop(pending_key, None)
+                st.success("Fila(s) limpiadas ✅")
+                st.rerun()
+            elif st.session_state.get(pending_key):
                 fila_vacia = _fila_vacia(seccion)
                 fila_vacia["BuscarEjercicio"] = ""
                 fila_vacia["Ejercicio"] = ""
@@ -407,13 +457,17 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                 for key in list(st.session_state.keys()):
                     if key.startswith(f"multiselect_{prefix}") or key.startswith(f"do_copy_{prefix}"):
                         st.session_state.pop(key, None)
+                    if key.startswith(f"delete_{prefix}"):
+                        st.session_state.pop(key, None)
+                    if key.startswith(f"copy_check_{prefix}") or key.startswith(f"prog_check_{prefix}"):
+                        st.session_state.pop(key, None)
                 st.session_state.pop(pending_key, None)
                 st.success("Sección limpiada ✅")
                 st.rerun()
             else:
                 st.session_state[pending_key] = True
 
-        if st.session_state.get(pending_key):
+        if st.session_state.get(pending_key) and not filas_marcadas_para_borrar:
             st.warning("Vuelve a presionar **Limpiar sección** para confirmar el borrado.")
 
         if submitted:
@@ -519,8 +573,11 @@ def editar_rutinas():
     dias_disponibles = claves_dias(rutina) if rutina else ["1","2","3","4","5"]
 
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    dias_texto = ", ".join([f"**Día {int(d)}**" for d in dias_disponibles])
+    dias_en_ui = st.session_state.get("dias_editables", dias_disponibles)
+    dias_texto = ", ".join([f"**Día {int(d)}**" for d in dias_en_ui])
     st.markdown(f"**N° Días de la rutina:** {dias_texto}")
+    if "_dia_creado_msg" in st.session_state:
+        st.info(st.session_state.pop("_dia_creado_msg"))
     if st.button("📥 Cargar rutina seleccionada", type="secondary"):
         cargar_doc_en_session(rutina, dias_disponibles)
         st.success("Rutina cargada en el editor ✅")
@@ -537,6 +594,8 @@ def editar_rutinas():
             _agregar_dia()
 
     # Si aún no hay "dias_editables", usamos los disponibles
+    if "dias_editables" not in st.session_state:
+        st.session_state["dias_editables"] = dias_disponibles.copy()
     dias_numericos = st.session_state.get("dias_editables", dias_disponibles)
     dias_labels = [f"Día {int(d)}" for d in dias_numericos]
 
@@ -576,6 +635,10 @@ def editar_rutinas():
 
             nueva_rutina = construir_rutina_desde_session(dias_labels_save)
 
+            bloque_objetivo = doc_data.get("bloque_rutina")
+            if not bloque_objetivo:
+                st.info("Esta semana no tiene bloque identificado; solo se actualizará la rutina seleccionada.")
+
             total = 0
             for doc in db.collection("rutinas_semanales").where("correo","==",correo).stream():
                 data = doc.to_dict() or {}
@@ -584,6 +647,13 @@ def editar_rutinas():
                     f_dt = datetime.strptime(f, "%Y-%m-%d")
                 except:
                     continue
+                if bloque_objetivo:
+                    bloque_doc = data.get("bloque_rutina")
+                    if doc.id != doc_id_semana and bloque_doc != bloque_objetivo:
+                        continue
+                else:
+                    if doc.id != doc_id_semana:
+                        continue
                 if f_dt >= fecha_sel:
                     rutina_existente = data.get("rutina", {}) or {}
                     for k_dia, lista in nueva_rutina.items():
@@ -591,8 +661,10 @@ def editar_rutinas():
                             rutina_existente[str(k_dia)] = lista
                     db.collection("rutinas_semanales").document(doc.id).update({"rutina": rutina_existente})
                     total += 1
-
-            st.success(f"✅ Cambios aplicados en {total} semana(s) (incluida la actual).")
+            if bloque_objetivo:
+                st.success(f"✅ Cambios aplicados en {total} semana(s) del bloque seleccionado.")
+            else:
+                st.success(f"✅ Cambios aplicados en {total} semana(s) (incluida la actual).")
 
 # Para ejecución directa en Streamlit multipage
 if __name__ == "__main__":
