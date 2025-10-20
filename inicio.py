@@ -390,7 +390,6 @@ def inicio_deportista():
         st.markdown(
             f"""
             <div class='banner'>
-              👋 Hola, <b>{nombre}</b><br>
               <span style='color:var(--muted)'>Panel de entrenador — aquí verás tus deportistas y el estado de sus bloques.</span>
             </div>
             """,
@@ -530,7 +529,6 @@ def inicio_deportista():
             f"""
             <div class='banner'>
               {msg}<br>
-              👋 Hola, <b>{nombre}</b><br>
               <span style='color:var(--muted)'>Aquí tienes tu semana de entrenamiento. Elige un día para comenzar.</span>
             </div>
             """,
