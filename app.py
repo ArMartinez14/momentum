@@ -289,7 +289,6 @@ is_admin = rol in ("admin", "administrador") or (
 MENU_DEPORTISTA = [
     "Inicio",
     "Ver Rutinas",
-    "Crear Descarga",
 ]
 
 MENU_ENTRENADOR = [
@@ -360,55 +359,53 @@ with header:
         </div>
     """
 
-    left_col, right_col = st.columns([3, 2], gap="large")
+    left_col, right_col = st.columns([3, 1], gap="large")
     with left_col:
         st.markdown(hero_html, unsafe_allow_html=True)
 
     with right_col:
         st.markdown(
-            f"""
-            <div style='color:rgba(240,232,228,0.76); text-transform:uppercase; font-size:0.72rem; letter-spacing:0.12em; margin-bottom:6px;'>Correo activo</div>
-            <div style='font-size:0.95rem; font-weight:600; color:#FFFBF9;'>{email or 'Sin correo'}</div>
+            """
+            <style>
+            div[data-testid="stButton"][data-button-key="btn_logout"] button,
+            div[data-testid="stButton"][data-button-key="btn_refresh"] button,
+            div[data-testid="stButton"][data-button-key="btn_back_inicio"] button {
+                padding: 0.35rem 0.9rem;
+                font-size: 0.5rem;
+            }
+            </style>
             """,
             unsafe_allow_html=True,
         )
 
-        mostrar_back = menu_actual != "Inicio"
-        if mostrar_back:
-            btn_cols = right_col.columns(3, gap="small")
-        else:
-            btn_cols = right_col.columns(2, gap="small")
+        if st.button(
+            "Cerrar sesión",
+            key="btn_logout",
+            type="secondary",
+            help="Finaliza tu sesión actual",
+            use_container_width=True,
+        ):
+            soft_logout()
 
-        col_idx = 0
-        if mostrar_back:
-            with btn_cols[col_idx]:
-                if st.button(
-                    "← Inicio",
-                    key="btn_back_inicio",
-                    type="secondary",
-                    help="Volver a Inicio",
-                ):
-                    _goto("Inicio")
-            col_idx += 1
+        if st.button(
+            "Actualizar",
+            key="btn_refresh",
+            type="secondary",
+            help="Actualizar datos y refrescar cachés",
+            use_container_width=True,
+        ):
+            st.cache_data.clear()
+            st.rerun()
 
-        with btn_cols[col_idx]:
+        if menu_actual != "Inicio":
             if st.button(
-                "Actualizar",
-                key="btn_refresh",
+                "Inicio",
+                key="btn_back_inicio",
                 type="secondary",
-                help="Actualizar datos y refrescar cachés",
+                help="Volver a Inicio",
+                use_container_width=True,
             ):
-                st.cache_data.clear()
-                st.rerun()
-
-        with btn_cols[col_idx + 1 if mostrar_back else col_idx]:
-            if st.button(
-                "Cerrar sesión",
-                key="btn_logout",
-                type="secondary",
-                help="Finaliza tu sesión actual",
-            ):
-                soft_logout()
+                _goto("Inicio")
 
 _render_navigation(opciones_menu, menu_actual)
 
