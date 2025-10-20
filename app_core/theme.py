@@ -123,38 +123,33 @@ label,p,span,div{{ color:var(--text-main); }}
 .nav-section__title {{ font-weight:700; font-size:1rem; letter-spacing:0.04em; text-transform:uppercase; color:rgba(226,94,80,0.96); }}
 .nav-section__hint {{ font-size:0.85rem; color:rgba(239,230,224,0.66); }}
 
-.nav-scroll-wrapper {{ position:relative; margin-bottom:12px; }}
-.nav-scroll {{
+.nav-desktop {{
   display:flex;
   gap:12px;
-  overflow-x:auto;
-  padding:4px 2px 12px;
-  scroll-snap-type:x mandatory;
-  scrollbar-width:none;
+  margin-bottom:14px;
+  flex-wrap:wrap;
 }}
-.nav-scroll::-webkit-scrollbar {{ display:none; }}
-.nav-scroll__item {{ scroll-snap-align:center; min-width:160px; flex:0 0 auto; }}
-.nav-scroll__item .stButton>button {{ width:100%; }}
-.nav-arrow {{
-  position:absolute;
-  top:50%;
-  transform:translateY(-50%);
-  width:34px;
-  height:34px;
-  border-radius:999px;
+.nav-desktop .stButton>button {{
+  min-width:150px;
+}}
+
+.nav-mobile {{
+  margin-bottom:14px;
+}}
+.nav-mobile__items {{
   display:flex;
-  align-items:center;
-  justify-content:center;
-  background:rgba(18,10,9,0.82);
-  border:1px solid rgba(226,94,80,0.32);
-  color:#F8F2EE;
-  cursor:pointer;
-  transition:background .2s ease;
-  box-shadow:0 12px 24px -16px rgba(0,0,0,0.5);
+  flex-wrap:wrap;
+  gap:12px;
 }}
-.nav-arrow:hover {{ background:rgba(226,94,80,0.3); }}
-.nav-arrow--left {{ left:-12px; }}
-.nav-arrow--right {{ right:-12px; }}
+.nav-mobile__items > div {{ flex:1 1 calc(33.333% - 12px); min-width:0; }}
+
+@media (min-width: 1024px) {{
+  .nav-mobile {{ display:none; }}
+}}
+
+@media (max-width: 1023px) {{
+  .nav-desktop {{ display:none; }}
+}}
 
 .client-sticky {{
   position:-webkit-sticky;
