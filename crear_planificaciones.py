@@ -17,30 +17,30 @@ from soft_login_full import soft_login_barrier
 # ==========================
 import streamlit as st
 
-# Paleta modo oscuro (la tuya actual, con terracota)
+# Paleta modo oscuro (alineada con la app principal)
 DARK = dict(
-    PRIMARY   ="#00C2FF",
-    SUCCESS   ="#22C55E",
-    WARNING   ="#F59E0B",
-    DANGER    ="#E2725B",   # ← rojo terracota
-    BG        ="#0B0F14",
-    SURFACE   ="#121821",
-    TEXT_MAIN ="#FFFFFF",
-    TEXT_MUTED="#94A3B8",
-    STROKE    ="rgba(255,255,255,.08)",
+    PRIMARY   ="#D64045",
+    SUCCESS   ="#C96B5D",
+    WARNING   ="#EFA350",
+    DANGER    ="#E2554A",
+    BG        ="#070505",
+    SURFACE   ="#141010",
+    TEXT_MAIN ="#F7F4F1",
+    TEXT_MUTED="#B9ABA5",
+    STROKE    ="rgba(226,94,80,.22)",
 )
 
-# Paleta modo claro (también con terracota)
+# Paleta modo claro (idéntica a la del theme base)
 LIGHT = dict(
-    PRIMARY   ="#0077FF",
-    SUCCESS   ="#16A34A",
-    WARNING   ="#D97706",
-    DANGER    ="#E2725B",   # ← rojo terracota
-    BG        ="#FFFFFF",
-    SURFACE   ="#F8FAFC",   
-    TEXT_MAIN ="#0F172A",   
-    TEXT_MUTED="#475569",   
-    STROKE    ="rgba(2,6,23,.08)",  
+    PRIMARY   ="#D64045",
+    SUCCESS   ="#C96B5D",
+    WARNING   ="#EFA350",
+    DANGER    ="#E2554A",
+    BG        ="#FBF7F5",
+    SURFACE   ="#FFF3EF",   
+    TEXT_MAIN ="#1B1919",   
+    TEXT_MUTED="#7B6E6A",   
+    STROKE    ="rgba(120,40,36,.18)",  
 )
 
 

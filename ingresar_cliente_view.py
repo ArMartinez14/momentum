@@ -16,10 +16,10 @@ from app_core.utils import empresa_de_usuario, EMPRESA_MOTION, EMPRESA_ASESORIA,
 # ==========================
 # 🎨 PALETA / ESTILOS (solo UI)
 # ==========================
-PRIMARY   = "#00C2FF"
-SUCCESS   = "#22C55E"
-WARNING   = "#F59E0B"
-DANGER    = "#EF4444"
+PRIMARY   = "#D64045"
+SUCCESS   = "#C96B5D"
+WARNING   = "#EFA350"
+DANGER    = "#E2554A"
 BG_DARK   = "#0B0F14"
 SURFACE   = "#121821"
 TEXT_MAIN = "#FFFFFF"

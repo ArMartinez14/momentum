@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import streamlit as st
-from streamlit.errors import StreamlitAPIException
 from firebase_admin import firestore
 from datetime import datetime, timedelta, date
 import json, random, re, math, html
@@ -162,14 +161,14 @@ st.markdown(
     .planner-card__meta.muted {
         color: var(--muted);
     }
-    .planner-card__badge {
+.planner-card__badge {
         display: inline-flex;
         align-items: center;
         gap: 6px;
         padding: 4px 12px;
         border-radius: 999px;
-        background: rgba(0, 194, 255, 0.18);
-        color: var(--primary);
+        background: rgba(214, 64, 69, 0.18);
+        color: #FDEBE7;
         font-weight: 600;
         width: fit-content;
     }
@@ -186,15 +185,15 @@ st.markdown(
         margin-bottom: 6px;
     }
     .planner-card__badge.is-active {
-        background: linear-gradient(135deg, rgba(0,194,255,0.2), rgba(34,197,94,0.25));
-        border: 1px solid rgba(34,197,94,0.45);
-        color: #10b981;
+        background: linear-gradient(135deg, rgba(226,94,80,0.22), rgba(120,24,20,0.28));
+        border: 1px solid rgba(226,94,80,0.38);
+        color: #FFEDEA;
     }
     .days-subtitle {
         margin: 18px 0 12px;
         font-size: 0.92rem;
         font-weight: 600;
-        color: rgba(14, 165, 233, 0.8);
+        color: rgba(226, 94, 80, 0.85);
         text-transform: uppercase;
         letter-spacing: 0.04em;
     }
@@ -209,15 +208,15 @@ st.markdown(
         align-items: flex-start;
         gap: 4px;
         white-space: pre-line;
-        box-shadow: 0 8px 24px rgba(56, 189, 248, 0.18);
+        box-shadow: 0 8px 24px rgba(226, 94, 80, 0.18);
     }
     div[data-testid="stButton"][data-key^="daybtn_"] button[kind="secondary"] {
-        background: linear-gradient(135deg, rgba(23, 37, 84, 0.85), rgba(30, 64, 175, 0.85)) !important;
-        color: #f8fafc !important;
+        background: linear-gradient(135deg, rgba(42, 16, 14, 0.92), rgba(30, 12, 11, 0.88)) !important;
+        color: #FFEDEA !important;
     }
     div[data-testid="stButton"][data-key^="daybtn_"] button[kind="primary"] {
-        background: linear-gradient(135deg, rgba(239, 68, 68, 0.9), rgba(244, 114, 182, 0.85)) !important;
-        color: #fff5f5 !important;
+        background: linear-gradient(135deg, rgba(226, 94, 80, 0.95), rgba(148, 28, 22, 0.9)) !important;
+        color: #FFF6F4 !important;
     }
     </style>
     """,
@@ -306,24 +305,38 @@ import re
 
 _URL_RGX = re.compile(r'(https?://\S+)', re.IGNORECASE)
 
+
+def _sanitize_detalle(detalle: str) -> tuple[str | None, str]:
+    """Extrae el primer link del detalle y devuelve (url, texto_sin_links)."""
+    if not detalle:
+        return None, ""
+
+    match = _URL_RGX.search(detalle)
+    url = match.group(1).strip() if match else None
+
+    # Elimina todas las URLs del texto y también separadores sobrantes
+    sin_url = _URL_RGX.sub("", detalle).strip()
+    sin_url = re.sub(r"[\-–—]+\s*$", "", sin_url).strip()
+    sin_url = re.sub(r"\s+[\-–—]\s+", " ", sin_url).strip()
+
+    return url, sin_url
+
 def _video_y_detalle_desde_ejercicio(e: dict) -> tuple[str, str]:
     """
     Retorna (video_url, detalle_visible). Si 'detalle' contiene un link y no hay e['video'],
     usa ese link como video y oculta el detalle.
     """
     video = (e.get("video") or "").strip()
-    detalle = (e.get("detalle") or "").strip()
+    detalle_in = (e.get("detalle") or "").strip()
+    link_en_detalle, detalle = _sanitize_detalle(detalle_in)
 
     # Si ya hay video explícito, devolvemos tal cual y mantenemos el detalle
     if video:
         return video, detalle
 
     # Si no hay video pero el detalle tiene un link -> usar ese link como video y NO mostrar detalle
-    if detalle:
-        m = _URL_RGX.search(detalle)
-        if m:
-            url = m.group(1).strip()
-            return url, ""  # ocultamos detalle si contenía link
+    if link_en_detalle:
+        return link_en_detalle, detalle
     return "", detalle
 
 def _to_float_or_none(v):
@@ -770,7 +783,7 @@ def ver_rutinas():
         hoy=datetime.now(); lunes=hoy-timedelta(days=hoy.weekday()); return lunes.strftime("%Y-%m-%d")
     def es_entrenador(rol): return rol.lower() in ["entrenador","admin","administrador"]
 
-    @st.cache_data(show_spinner=False)
+    @st.cache_data(show_spinner=False, ttl=120, max_entries=64)
     def cargar_todas_las_rutinas():
         docs = db.collection("rutinas_semanales").stream()
         return [doc.to_dict() for doc in docs]
@@ -805,7 +818,7 @@ def ver_rutinas():
     if es_entrenador(rol):
         rol_lower = rol.strip().lower()
 
-        @st.cache_data(show_spinner=False)
+        @st.cache_data(show_spinner=False, ttl=300, max_entries=256)
         def _usuarios_por_correo():
             mapping = {}
             try:
@@ -1474,7 +1487,7 @@ def ver_rutinas():
                           step=0.5, key=f"rpe_{semana_sel}_{dia_sel}")
     st.markdown("""
     <div style="height:6px;border-radius:999px;background:
-    linear-gradient(90deg,#00C2FF 0%,#22C55E 40%,#F59E0B 75%,#EF4444 100%); margin-top:-8px;"></div>
+    linear-gradient(90deg,#D64045 0%,#C96B5D 40%,#EFA350 75%,#E2554A 100%); margin-top:-8px;"></div>
     """, unsafe_allow_html=True)
 
     with st.container():

@@ -256,13 +256,13 @@ def _db():
     except Exception:
         return None
 
-def _find_user(correo: str):
-    """Busca usuario por correo (normalizado a minúsculas) en la colección 'usuarios'."""
+@st.cache_data(show_spinner=False, ttl=120, max_entries=512)
+def _cached_user_lookup(correo: str):
     db = _db()
     if db is None:
         return None
+    correo = (correo or "").strip().lower()
     try:
-        correo = (correo or "").strip().lower()
         q = db.collection(COL_USUARIOS).where("correo", "==", correo).limit(1).stream()
         doc = next(q, None)
         if not doc:
@@ -276,6 +276,13 @@ def _find_user(correo: str):
         }
     except Exception:
         return None
+
+
+def _find_user(correo: str):
+    """Busca usuario por correo (normalizado a minúsculas) en la colección 'usuarios'."""
+    if not correo:
+        return None
+    return _cached_user_lookup(correo)
 
 # =========================
 # CookieManager (singleton)
