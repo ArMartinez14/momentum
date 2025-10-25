@@ -421,11 +421,7 @@ def enviar_correo_bienvenida(
                 "o entra al portal, abre el menú <strong>Atleta</strong> y selecciona el submenú <strong>Anamnesis</strong>. "
                 "Recuerda usar el mismo correo con el que te registramos.</p>"
             )
-        else:
-            html_parts.append(
-                "<p>Una vez dentro de la app, abre el menú <strong>Atleta</strong> y selecciona el submenú "
-                "<strong>Anamnesis</strong> para completar la encuesta inicial.</p>"
-            )
+        
 
     html_parts.append(
         "<p>Si necesitas apoyo, responde a este correo y tu entrenador te ayudará a resolver cualquier duda.</p>"
