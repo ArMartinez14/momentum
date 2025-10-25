@@ -10,17 +10,25 @@ from firebase_admin import firestore
 # Helpers de permisos
 # ======================
 ADMIN_ROLES = {"admin", "administrador", "owner", "Admin", "Administrador"}
+ENTRENADOR_ROLES = {"entrenador", "Entrenador", "coach", "Coach"}
+
+def _rol_actual() -> str:
+    return (st.session_state.get("rol") or "").strip()
+
 
 def _es_admin() -> bool:
-    rol = (st.session_state.get("rol") or "").strip()
-    return rol in ADMIN_ROLES
+    return _rol_actual() in ADMIN_ROLES
+
+
+def _es_entrenador() -> bool:
+    return _rol_actual() in ENTRENADOR_ROLES
 
 def _correo_user() -> str:
     return (st.session_state.get("correo") or "").strip().lower()
 
 def _puede_editar_video(row: dict) -> bool:
-    """Admin siempre; entrenador solo si es creador/propietario."""
-    if _es_admin():
+    """Admin o entrenador siempre; otros solo si son creadores."""
+    if _es_admin() or _es_entrenador():
         return True
     creador = (row.get("entrenador") or row.get("creado_por") or "").strip().lower()
     return creador and creador == _correo_user()

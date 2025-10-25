@@ -1736,11 +1736,17 @@ def crear_rutinas():
                     st.dataframe(pd.DataFrame(tabla), use_container_width=True, hide_index=True)
 
     # ======= Guardar =======
-    botones_guardado = st.columns([1, 1], gap="medium")
+    botones_guardado = st.columns([1, 1, 1], gap="medium")
     guardar_borrador_click = botones_guardado[0].button(
         "💾 Guardar borrador", type="secondary", use_container_width=True
     )
-    guardar_rutina_click = botones_guardado[1].button(
+    enviar_correo_check = botones_guardado[1].checkbox(
+        "Notificar por correo",
+        value=False,
+        help="Envía un correo al atleta cuando el nuevo bloque quede disponible.",
+        key="crear_rutina_notificar_correo",
+    )
+    guardar_rutina_click = botones_guardado[2].button(
         "Guardar Rutina", type="primary", use_container_width=True
     )
 

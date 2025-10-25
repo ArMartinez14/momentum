@@ -6,6 +6,14 @@ import firebase_admin
 import json
 import copy
 
+from app_core.utils import (
+    empresa_de_usuario,
+    EMPRESA_MOTION,
+    EMPRESA_ASESORIA,
+    EMPRESA_DESCONOCIDA,
+    correo_a_doc_id,
+)
+
 # =============== 🔐 FIREBASE ===============
 if not firebase_admin._apps:
     cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
@@ -71,6 +79,11 @@ def cargar_ejercicios():
     return { (d.to_dict() or {}).get("nombre",""): (d.to_dict() or {}) for d in docs if d.exists }
 
 @st.cache_data(show_spinner=False)
+def cargar_usuarios():
+    docs = db.collection("usuarios").stream()
+    return [doc.to_dict() for doc in docs if doc.exists]
+
+@st.cache_data(show_spinner=False)
 def cargar_implementos():
     impl = {}
     for doc in db.collection("implementos").stream():
@@ -80,6 +93,7 @@ def cargar_implementos():
     return impl
 
 EJERCICIOS  = cargar_ejercicios()
+USUARIOS    = cargar_usuarios()
 IMPLEMENTOS = cargar_implementos()
 
 # =============== 🔁 MAPEO (igual a editar_rutinas) ===============
@@ -358,13 +372,47 @@ def _render_tabla_manual(dia_sel: str, bloque_sel: str, ejercicios_dia: list[dic
 def descarga_rutina():
     st.title("📉 Crear Rutina de Descarga")
 
-    # Clientes (nombre -> correo)
+    # Mapear usuarios y filtrarlos según empresa
+    usuarios_map: dict[str, dict] = {}
+    for u in USUARIOS:
+        correo_u = (u.get("correo") or "").strip().lower()
+        if correo_u:
+            usuarios_map[correo_u] = u
+            usuarios_map[correo_a_doc_id(correo_u)] = u
+
+    correo_login = (st.session_state.get("correo") or "").strip().lower()
+    rol_login = (st.session_state.get("rol") or "").strip().lower()
+    empresa_login = empresa_de_usuario(correo_login, usuarios_map) if correo_login else EMPRESA_DESCONOCIDA
+
     clientes_dict = {}
     for doc in db.collection("rutinas_semanales").stream():
         data = doc.to_dict() or {}
-        nombre, correo = data.get("cliente"), data.get("correo")
-        if nombre and correo:
-            clientes_dict[nombre] = correo
+        nombre = data.get("cliente")
+        correo_cli = (data.get("correo") or "").strip().lower()
+        if not nombre or not correo_cli:
+            continue
+
+        empresa_cli = empresa_de_usuario(correo_cli, usuarios_map)
+        coach_cli = ((usuarios_map.get(correo_cli) or {}).get("coach_responsable") or "").strip().lower()
+
+        permitido = True
+        if rol_login in ("entrenador",):
+            if empresa_login == EMPRESA_ASESORIA:
+                permitido = coach_cli == correo_login
+            elif empresa_login == EMPRESA_MOTION:
+                if empresa_cli == EMPRESA_MOTION:
+                    permitido = True
+                elif empresa_cli == EMPRESA_DESCONOCIDA:
+                    permitido = coach_cli == correo_login
+                else:
+                    permitido = False
+            else:
+                permitido = coach_cli == correo_login
+        elif rol_login not in ("admin", "administrador"):
+            permitido = coach_cli == correo_login
+
+        if permitido:
+            clientes_dict[nombre] = correo_cli
 
     if not clientes_dict:
         st.warning("❌ No hay clientes con rutinas.")

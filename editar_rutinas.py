@@ -8,6 +8,13 @@ import pandas as pd
 from firebase_admin import firestore
 from app_core.firebase_client import get_db
 from app_core.theme import inject_theme
+from app_core.utils import (
+    empresa_de_usuario,
+    EMPRESA_MOTION,
+    EMPRESA_ASESORIA,
+    EMPRESA_DESCONOCIDA,
+    correo_a_doc_id,
+) 
 
 # ===================== 🎨 PALETA / ESTILOS =====================
 inject_theme()
@@ -530,18 +537,52 @@ def editar_rutinas():
 
     # --- Selección de cliente / semana (en card) ---
     st.markdown("<div class='card'>", unsafe_allow_html=True)
+    usuarios_map: dict[str, dict] = {}
+    usuarios_full = cargar_usuarios()
+    for u in usuarios_full:
+        correo_u = (u.get("correo") or "").strip().lower()
+        if correo_u:
+            usuarios_map[correo_u] = u
+            usuarios_map[correo_a_doc_id(correo_u)] = u
+
+    correo_login = (st.session_state.get("correo") or "").strip().lower()
+    rol_login = (st.session_state.get("rol") or "").strip().lower()
+    empresa_login = empresa_de_usuario(correo_login, usuarios_map) if correo_login else EMPRESA_DESCONOCIDA
+
     clientes_dict = {}
     for doc in db.collection("rutinas_semanales").stream():
         data = doc.to_dict() or {}
         nombre = data.get("cliente")
-        correo = data.get("correo")
-        if nombre and correo:
-            clientes_dict[nombre] = correo
+        correo_cli = (data.get("correo") or "").strip().lower()
+        if not nombre or not correo_cli:
+            continue
+
+        empresa_cli = empresa_de_usuario(correo_cli, usuarios_map)
+        coach_cli = ((usuarios_map.get(correo_cli) or {}).get("coach_responsable") or "").strip().lower()
+
+        permitido = True
+        if rol_login in ("entrenador",):
+            if empresa_login == EMPRESA_ASESORIA:
+                permitido = coach_cli == correo_login
+            elif empresa_login == EMPRESA_MOTION:
+                if empresa_cli == EMPRESA_MOTION:
+                    permitido = True
+                elif empresa_cli == EMPRESA_DESCONOCIDA:
+                    permitido = coach_cli == correo_login
+                else:
+                    permitido = False
+            else:
+                permitido = coach_cli == correo_login
+        elif rol_login not in ("admin", "administrador"):
+            permitido = coach_cli == correo_login
+
+        if permitido:
+            clientes_dict[nombre] = correo_cli
 
     nombres_clientes = sorted(clientes_dict.keys())
     nombre_sel = st.selectbox("Selecciona el cliente:", nombres_clientes) if nombres_clientes else ""
     if not nombre_sel:
-        st.info("No hay clientes con rutinas.")
+        st.info("No tienes clientes con rutinas disponibles para editar.")
         st.markdown("</div>", unsafe_allow_html=True)
         return
 

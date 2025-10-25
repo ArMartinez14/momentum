@@ -524,18 +524,30 @@ def soft_login_barrier(required_roles=None, titulo="Bienvenido", ttl_seconds: in
 
     # UI del login
     st.title(titulo)
-    st.caption("Ingresa tu correo (no se requiere contraseña).")
+    st.caption("Ingresa tu correo para acceder. Si es tu primera vez, usaremos tu e-mail para validar tu rol.")
 
     if stx is None or TimestampSigner is None:
-        st.info("Nota: faltan dependencias para persistir la sesión. Instala "
-                "`extra-streamlit-components` e `itsdangerous`.")
+        st.info(
+            "Nota: faltan dependencias para persistir la sesión. "
+            "Instala `extra-streamlit-components` e `itsdangerous`."
+        )
 
-    correo = st.text_input("Correo electrónico", key="login_correo", placeholder="nombre@dominio.com")
-    # “Recordarme” a 7 días
-    col1, _ = st.columns([1, 3])
-    remember = col1.checkbox("Recordarme (7 días)", value=True)
+    correo = st.text_input(
+        "Correo electrónico",
+        key="login_correo",
+        placeholder="nombre@dominio.com",
+    )
 
-    if st.button("Continuar"):
+    remember = st.checkbox(
+        "Recordarme (7 días)",
+        value=True,
+        key="softlogin_remember_chk",
+        help="Mantén tu sesión iniciada por una semana.",
+    )
+
+    login_clicked = st.button("Continuar")
+
+    if login_clicked:
         correo = (correo or "").strip().lower().replace(" ", "")
         if not correo or "@" not in correo:
             st.warning("Escribe un correo válido.")

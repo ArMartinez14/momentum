@@ -569,3 +569,5 @@ def inicio_deportista():
 
 if __name__ == "__main__":
     inicio_deportista()
+
+__all__ = ["inicio_deportista", "SEGUIMIENTO_LABEL"]

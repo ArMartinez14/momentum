@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import date, datetime
 from typing import Any, Optional
 from uuid import uuid4
@@ -238,368 +239,372 @@ def render_anamnesis(db: Optional[firestore.Client] = None) -> None:
     doc_ref = db.collection(COLLECTION_NAME).document(doc_id)
     datos_previos = obtener_respuestas(db, correo)
 
-    if datos_previos:
-        ultima = datos_previos.get("ultima_actualizacion")
-        if isinstance(ultima, datetime):
-            ultima_str = ultima.strftime("%d/%m/%Y %H:%M")
-        else:
+    es_gestor = rol_usuario in GESTOR_ROLES
+    if es_gestor:
+        tab_form, tab_respuestas = st.tabs(["Cuestionario", "Respuestas de deportistas"])
+    else:
+        tab_form = nullcontext()
+        tab_respuestas = None
+
+    with tab_form:
+        if datos_previos:
+            ultima = datos_previos.get("ultima_actualizacion")
             ultima_str = ""
-        if ultima_str:
-            st.info(f"Tus datos fueron actualizados por última vez el {ultima_str}. Puedes modificarlos si lo necesitas.")
+            if isinstance(ultima, datetime):
+                ultima_str = ultima.strftime("%d/%m/%Y %H:%M")
+            elif isinstance(ultima, str):
+                ultima_str = ultima
+            if ultima_str:
+                st.info(
+                    f"Tus datos fueron actualizados por última vez el {ultima_str}. Puedes modificarlos si lo necesitas."
+                )
 
-    coach_form_owner = _resolver_coach_para_usuario(db, correo, rol_usuario)
-    formulario_personalizado = obtener_formulario_coach(db, coach_form_owner) if coach_form_owner else {}
-    preguntas_personalizadas = formulario_personalizado.get("preguntas") or []
-
-    if preguntas_personalizadas:
-        _render_form_personalizado(
-            db=db,
-            doc_ref=doc_ref,
-            datos_previos=datos_previos,
-            correo_usuario=correo,
-            coach_owner=coach_form_owner,
-            preguntas=preguntas_personalizadas,
+        coach_form_owner = _resolver_coach_para_usuario(db, correo, rol_usuario)
+        formulario_personalizado = (
+            obtener_formulario_coach(db, coach_form_owner) if coach_form_owner else {}
         )
-        if rol_usuario in GESTOR_ROLES:
-            st.markdown("---")
-            _render_anamnesis_config(db, coach_form_owner or correo, formulario_personalizado)
-        return
+        preguntas_personalizadas = formulario_personalizado.get("preguntas") or []
+        prev_personalizadas: dict[str, str] = {}
+        for item in datos_previos.get("respuestas_personalizadas", []) or []:
+            qid = item.get("id")
+            if qid:
+                prev_personalizadas[qid] = item.get("respuesta", "")
+        respuestas_personalizadas_form: dict[str, str] = {}
 
-    disp_min, disp_max = datos_previos.get("disponibilidad_semanal", (3, 4))
-    if not isinstance(disp_min, int) or not isinstance(disp_max, int):
-        disp_min, disp_max = _parse_rango_disponibilidad((disp_min, disp_max))
-    preseleccion = {disp_min, disp_max}
-    if len(preseleccion) < 2:
-        candidato = disp_min + 1 if disp_min < 7 else disp_min - 1
-        if 1 <= candidato <= 7:
-            preseleccion.add(candidato)
-    dias_seleccionados_form: list[int] = []
+        disp_min, disp_max = datos_previos.get("disponibilidad_semanal", (3, 4))
+        if not isinstance(disp_min, int) or not isinstance(disp_max, int):
+            disp_min, disp_max = _parse_rango_disponibilidad((disp_min, disp_max))
+        preseleccion = {disp_min, disp_max}
+        if len(preseleccion) < 2:
+            candidato = disp_min + 1 if disp_min < 7 else disp_min - 1
+            if 1 <= candidato <= 7:
+                preseleccion.add(candidato)
+        dias_seleccionados_form: list[int] = []
 
-    condicion_prev = datos_previos.get("condicion_medica") or ""
-    lesiones_prev = (
-        datos_previos.get("lesiones_cirugias")
-        or datos_previos.get("lesiones")
-        or ""
-    )
-    suplementos_detalle_prev = (
-        datos_previos.get("suplementos_med_detalle")
-        or datos_previos.get("medicacion")
-        or ""
-    )
-    suplementos_prev = datos_previos.get("suplementos_med")
-    if suplementos_prev not in {"Sí", "No"}:
-        suplementos_prev = "Sí" if suplementos_detalle_prev else "No"
-    tiempo_sesion_prev = datos_previos.get("tiempo_sesion") or ""
-    ultimo_entrenamiento_prev = datos_previos.get("tiempo_ultimo_entrenamiento") or datos_previos.get("experiencia") or ""
-    actividad_prev = datos_previos.get("actividad_extra")
-    if actividad_prev not in {"Sí", "No"}:
-        actividad_prev = "Sí" if datos_previos.get("actividad_extra_detalle") else "No"
-    actividad_detalle_prev = datos_previos.get("actividad_extra_detalle") or ""
-
-    objetivo_opciones = [
-        "Pérdida de grasa",
-        "Aumento de masa muscular",
-        "Mejorar salud / condición física",
-        "Rendimiento deportivo",
-        "Otro (especificar)",
-    ]
-    objetivo_prev = datos_previos.get("objetivo_principal") or datos_previos.get("objetivo") or ""
-    objetivo_otro_prev = datos_previos.get("objetivo_principal_otro") or ""
-    if objetivo_prev and objetivo_prev not in objetivo_opciones:
-        objetivo_otro_prev = objetivo_otro_prev or objetivo_prev
-        objetivo_prev = "Otro (especificar)"
-    if not objetivo_prev:
-        objetivo_prev = objetivo_opciones[0]
-
-    expectativa_opciones = [
-        "Disciplina y constancia",
-        "Aprender técnica",
-        "Mejorar mi salud",
-        "Socializar",
-        "Otro (especificar)",
-    ]
-    expectativa_prev = datos_previos.get("expectativa") or datos_previos.get("comentarios") or ""
-    expectativa_otro_prev = datos_previos.get("expectativa_otro") or ""
-    if expectativa_prev and expectativa_prev not in expectativa_opciones:
-        expectativa_otro_prev = expectativa_otro_prev or expectativa_prev
-        expectativa_prev = "Otro (especificar)"
-    if not expectativa_prev:
-        expectativa_prev = expectativa_opciones[0]
-
-    tiempo_sesion_opciones = [
-        "Menos de 1 hora",
-        "1 hora",
-        "Más de 1 hora",
-    ]
-    ultimo_entrenamiento_opciones = [
-        "Actualmente entreno",
-        "Hace menos de 3 meses",
-        "Hace más de 3 meses",
-        "Nunca he entrenado",
-    ]
-
-    with st.form("anamnesis_form"):
-        st.markdown("### 🩺 Salud y antecedentes")
-        fecha_nacimiento = st.date_input(
-            "Fecha de nacimiento",
-            value=datos_previos.get("fecha_nacimiento"),
-            help="Nos ayuda a ajustar recomendaciones según tu etapa de vida.",
+        fecha_nacimiento_prev = datos_previos.get("fecha_nacimiento")
+        fecha_nacimiento_texto = _format_fecha_ddmmaaaa(fecha_nacimiento_prev)
+        condicion_prev = datos_previos.get("condicion_medica") or ""
+        lesiones_prev = (
+            datos_previos.get("lesiones_cirugias")
+            or datos_previos.get("lesiones")
+            or ""
         )
-
-        condicion_medica = st.text_area(
-            "¿Tienes alguna enfermedad o condición médica que debamos conocer?",
-            value=condicion_prev,
-            placeholder="Ej.: hipertensión, diabetes, asma, etc.",
+        suplementos_detalle_prev = (
+            datos_previos.get("suplementos_med_detalle")
+            or datos_previos.get("medicacion")
+            or ""
         )
-
-        lesiones_cirugias = st.text_area(
-            "¿Tienes o has tenido alguna lesión o cirugía importante?",
-            value=lesiones_prev,
-            placeholder="Si la tienes actualmente, descríbela brevemente.",
+        suplementos_prev = datos_previos.get("suplementos_med")
+        if suplementos_prev not in {"Sí", "No"}:
+            suplementos_prev = "Sí" if suplementos_detalle_prev else "No"
+        tiempo_sesion_prev = datos_previos.get("tiempo_sesion") or ""
+        ultimo_entrenamiento_prev = (
+            datos_previos.get("tiempo_ultimo_entrenamiento")
+            or datos_previos.get("experiencia")
+            or ""
         )
+        actividad_prev = datos_previos.get("actividad_extra")
+        if actividad_prev not in {"Sí", "No"}:
+            actividad_prev = "Sí" if datos_previos.get("actividad_extra_detalle") else "No"
+        actividad_detalle_prev = datos_previos.get("actividad_extra_detalle") or ""
 
-        suplementos_opciones = ["Sí", "No"]
-        suplementos = st.radio(
-            "¿Estás tomando algún suplemento o medicamento actualmente?",
-            suplementos_opciones,
-            index=_enum_index(suplementos_opciones, suplementos_prev),
-            horizontal=True,
-        )
-        suplementos_detalle = ""
-        if suplementos == "Sí":
-            suplementos_detalle = st.text_input(
-                "Especifica cuál",
-                value=suplementos_detalle_prev,
+        objetivo_opciones = [
+            "Pérdida de grasa",
+            "Aumento de masa muscular",
+            "Mejorar salud / condición física",
+            "Rendimiento deportivo",
+            "Otro (especificar)",
+        ]
+        objetivo_prev = datos_previos.get("objetivo_principal") or datos_previos.get("objetivo") or ""
+        objetivo_otro_prev = datos_previos.get("objetivo_principal_otro") or ""
+        if objetivo_prev and objetivo_prev not in objetivo_opciones:
+            objetivo_otro_prev = objetivo_otro_prev or objetivo_prev
+            objetivo_prev = "Otro (especificar)"
+        if not objetivo_prev:
+            objetivo_prev = objetivo_opciones[0]
+
+        expectativa_opciones = [
+            "Disciplina y constancia",
+            "Aprender técnica",
+            "Mejorar mi salud",
+            "Socializar",
+            "Otro (especificar)",
+        ]
+        expectativa_prev = datos_previos.get("expectativa") or datos_previos.get("comentarios") or ""
+        expectativa_otro_prev = datos_previos.get("expectativa_otro") or ""
+        if expectativa_prev and expectativa_prev not in expectativa_opciones:
+            expectativa_otro_prev = expectativa_otro_prev or expectativa_prev
+            expectativa_prev = "Otro (especificar)"
+        if not expectativa_prev:
+            expectativa_prev = expectativa_opciones[0]
+
+        tiempo_sesion_opciones = [
+            "Menos de 1 hora",
+            "1 hora",
+            "Más de 1 hora",
+        ]
+        ultimo_entrenamiento_opciones = [
+            "Actualmente entreno",
+            "Hace menos de 3 meses",
+            "Hace más de 3 meses",
+            "Nunca he entrenado",
+        ]
+
+        with st.form("anamnesis_form"):
+            st.markdown("### 🩺 Salud y antecedentes")
+            fecha_nacimiento_input = st.text_input(
+                "Fecha de nacimiento (DD/MM/AAAA)",
+                value=fecha_nacimiento_texto,
+                placeholder="DD/MM/AAAA",
+                help="Ingresa la fecha siguiendo el formato Día/Mes/Año.",
             )
-        else:
+
+            condicion_medica = st.text_area(
+                "¿Tienes alguna enfermedad o condición médica que debamos conocer?",
+                value=condicion_prev,
+                placeholder="Ej.: hipertensión, diabetes, asma, etc.",
+            )
+
+            lesiones_cirugias = st.text_area(
+                "¿Tienes o has tenido alguna lesión o cirugía importante?",
+                value=lesiones_prev,
+                placeholder="Si la tienes actualmente, descríbela brevemente.",
+            )
+
+            suplementos_opciones = ["Sí", "No"]
+            suplementos = st.radio(
+                "¿Estás tomando algún suplemento o medicamento actualmente?",
+                suplementos_opciones,
+                index=_enum_index(suplementos_opciones, suplementos_prev),
+                horizontal=True,
+            )
             suplementos_detalle = ""
-
-        st.markdown("### ⚡️ Hábitos y entrenamiento")
-        st.markdown("**¿Cuántos días a la semana puedes entrenar?**")
-        st.caption("Selecciona exactamente dos opciones para indicar tu rango (mínimo y máximo).")
-        cols_dias = st.columns(7)
-        for idx, dia in enumerate(range(1, 8)):
-            with cols_dias[idx]:
-                marcado = st.checkbox(
-                    str(dia),
-                    value=(dia in preseleccion),
-                    key=f"anamnesis_dia_semana_{dia}",
+            if suplementos == "Sí":
+                suplementos_detalle = st.text_input(
+                    "Especifica cuál",
+                    value=suplementos_detalle_prev,
                 )
-            if marcado:
-                dias_seleccionados_form.append(dia)
-
-        tiempo_sesion = st.radio(
-            "¿Cuánto tiempo puedes dedicar a cada sesión?",
-            tiempo_sesion_opciones,
-            index=_enum_index(tiempo_sesion_opciones, tiempo_sesion_prev or tiempo_sesion_opciones[0]),
-        )
-
-        ultimo_entrenamiento = st.radio(
-            "¿Hace cuánto tiempo no realizas entrenamiento con pesas?",
-            ultimo_entrenamiento_opciones,
-            index=_enum_index(ultimo_entrenamiento_opciones, ultimo_entrenamiento_prev or ultimo_entrenamiento_opciones[0]),
-        )
-
-        actividad = st.radio(
-            "¿Practicas algún deporte o actividad fuera del gimnasio?",
-            ["Sí", "No"],
-            index=_enum_index(["Sí", "No"], actividad_prev),
-            horizontal=True,
-        )
-        actividad_detalle = ""
-        if actividad == "Sí":
-            actividad_detalle = st.text_input(
-                "¿Cuál?",
-                value=actividad_detalle_prev,
-            )
-        else:
-            actividad_detalle = ""
-
-        st.markdown("### 🎯 Objetivos y motivación")
-        objetivo_principal = st.radio(
-            "¿Cuál es tu principal objetivo?",
-            objetivo_opciones,
-            index=_enum_index(objetivo_opciones, objetivo_prev),
-        )
-        objetivo_principal_otro = ""
-        if objetivo_principal == "Otro (especificar)":
-            objetivo_principal_otro = st.text_input(
-                "Especifica tu objetivo",
-                value=objetivo_otro_prev,
-            )
-        else:
-            objetivo_principal_otro = ""
-
-        expectativa = st.radio(
-            "¿Qué esperas lograr con la asesoría o tu experiencia en el gimnasio?",
-            expectativa_opciones,
-            index=_enum_index(expectativa_opciones, expectativa_prev),
-        )
-        expectativa_otro = ""
-        if expectativa == "Otro (especificar)":
-            expectativa_otro = st.text_input(
-                "Especifica qué esperas lograr",
-                value=expectativa_otro_prev,
-            )
-        else:
-            expectativa_otro = ""
-
-        submitted = st.form_submit_button("Guardar Anamnesis", type="primary")
-
-    dias_seleccionados = sorted(set(dias_seleccionados_form))
-
-    if not submitted:
-        if rol_usuario in GESTOR_ROLES:
-            st.markdown("---")
-            _render_anamnesis_config(db, coach_form_owner or correo, formulario_personalizado)
-        return
-
-    if len(dias_seleccionados) != 2:
-        st.warning("Selecciona exactamente dos días para indicar tu rango de entrenamiento semanal.")
-        if rol_usuario in GESTOR_ROLES:
-            st.markdown("---")
-            _render_anamnesis_config(db, coach_form_owner or correo, formulario_personalizado)
-        return
-
-    dias_min, dias_max = dias_seleccionados
-
-    # Preparar payload
-    ahora = datetime.utcnow()
-    payload = {
-        "correo": correo,
-        "fecha_nacimiento": fecha_nacimiento.isoformat() if isinstance(fecha_nacimiento, date) else None,
-        "condicion_medica": condicion_medica.strip(),
-        "lesiones_cirugias": lesiones_cirugias.strip(),
-        "suplementos_med": suplementos,
-        "suplementos_med_detalle": suplementos_detalle.strip(),
-        "tiempo_sesion": tiempo_sesion,
-        "tiempo_ultimo_entrenamiento": ultimo_entrenamiento,
-        "actividad_extra": actividad,
-        "actividad_extra_detalle": actividad_detalle.strip(),
-        "objetivo_principal": objetivo_principal,
-        "objetivo_principal_otro": objetivo_principal_otro.strip(),
-        "expectativa": expectativa,
-        "expectativa_otro": expectativa_otro.strip(),
-        "disponibilidad_semanal": {
-            "min": int(dias_min),
-            "max": int(dias_max),
-        },
-        "disponibilidad_semanal_min": int(dias_min),
-        "disponibilidad_semanal_max": int(dias_max),
-        "completado": True,
-        "ultima_actualizacion": ahora,
-    }
-    # Campos de compatibilidad con versiones previas
-    payload["objetivo"] = objetivo_principal_otro.strip() or objetivo_principal
-    payload["experiencia"] = ultimo_entrenamiento
-    payload["lesiones"] = lesiones_cirugias.strip()
-    payload["medicacion"] = suplementos_detalle.strip() if suplementos == "Sí" else ""
-    payload["habitos"] = condicion_medica.strip()
-    payload["comentarios"] = expectativa_otro.strip() or expectativa
-
-    if not datos_previos.get("creado_en"):
-        payload["creado_en"] = ahora
-
-    try:
-        doc_ref.set(payload, merge=True)
-        _desactivar_requisito_anamnesis(db, correo)
-        st.success("¡Gracias! Tu anamnesis fue guardada correctamente.")
-        st.session_state["anamnesis_completa"] = True
-        st.session_state["anamnesis_pendiente"] = False
-    except Exception as exc:  # pragma: no cover
-        st.error(f"No se pudo guardar la anamnesis: {exc}")
-
-    if rol_usuario in GESTOR_ROLES:
-        st.markdown("---")
-        _render_anamnesis_config(db, coach_form_owner or correo, formulario_personalizado)
-
-
-def _render_form_personalizado(
-    db: firestore.Client,
-    doc_ref: firestore.DocumentReference,
-    datos_previos: dict[str, Any],
-    correo_usuario: str,
-    coach_owner: Optional[str],
-    preguntas: list[dict[str, Any]],
-) -> None:
-    st.subheader("📋 Anamnesis personalizada")
-    if coach_owner and coach_owner != correo_usuario:
-        st.caption(f"Formulario creado por el coach: {coach_owner}")
-
-    prev_map = {}
-    for item in datos_previos.get("respuestas_personalizadas", []) or []:
-        qid = item.get("id")
-        if qid:
-            prev_map[qid] = item.get("respuesta", "")
-
-    respuestas: dict[str, str] = {}
-    with st.form("anamnesis_personalizada_form"):
-        for pregunta in preguntas:
-            qid = pregunta.get("id") or uuid4().hex
-            titulo = pregunta.get("titulo") or "Pregunta"
-            tipo = pregunta.get("tipo") or QUESTION_TYPE_TEXTO
-            tipo = tipo if tipo in (QUESTION_TYPE_TEXTO, QUESTION_TYPE_SELECCION) else QUESTION_TYPE_TEXTO
-            key_base = f"custom_{qid}"
-
-            if tipo == QUESTION_TYPE_SELECCION:
-                opciones = pregunta.get("opciones") or []
-                if not opciones:
-                    respuesta = st.text_input(titulo, value=prev_map.get(qid, ""), key=key_base)
-                    respuestas[qid] = respuesta.strip()
-                else:
-                    opciones_combo = ["— Selecciona —"] + opciones
-                    valor_prev = prev_map.get(qid, "")
-                    try:
-                        index = opciones_combo.index(valor_prev) if valor_prev else 0
-                    except ValueError:
-                        index = 0
-                    seleccion = st.selectbox(titulo, opciones_combo, index=index, key=key_base)
-                    respuestas[qid] = "" if seleccion == "— Selecciona —" else seleccion
             else:
-                respuesta = st.text_area(
-                    titulo,
-                    value=prev_map.get(qid, ""),
-                    key=key_base,
+                suplementos_detalle = ""
+
+            st.markdown("### ⚡️ Hábitos y entrenamiento")
+            st.markdown("**¿Cuántos días a la semana puedes entrenar?**")
+            st.caption("Selecciona exactamente dos opciones para indicar tu rango (mínimo y máximo).")
+            cols_dias = st.columns(7)
+            for idx, dia in enumerate(range(1, 8)):
+                with cols_dias[idx]:
+                    marcado = st.checkbox(
+                        str(dia),
+                        value=(dia in preseleccion),
+                        key=f"anamnesis_dia_semana_{dia}",
+                    )
+                if marcado:
+                    dias_seleccionados_form.append(dia)
+
+            tiempo_sesion = st.radio(
+                "¿Cuánto tiempo puedes dedicar a cada sesión?",
+                tiempo_sesion_opciones,
+                index=_enum_index(tiempo_sesion_opciones, tiempo_sesion_prev or tiempo_sesion_opciones[0]),
+            )
+
+            ultimo_entrenamiento = st.radio(
+                "¿Hace cuánto tiempo no realizas entrenamiento con pesas?",
+                ultimo_entrenamiento_opciones,
+                index=_enum_index(
+                    ultimo_entrenamiento_opciones,
+                    ultimo_entrenamiento_prev or ultimo_entrenamiento_opciones[0],
+                ),
+            )
+
+            actividad = st.radio(
+                "¿Practicas algún deporte o actividad fuera del gimnasio?",
+                ["Sí", "No"],
+                index=_enum_index(["Sí", "No"], actividad_prev),
+                horizontal=True,
+            )
+            actividad_detalle = ""
+            if actividad == "Sí":
+                actividad_detalle = st.text_input(
+                    "¿Cuál?",
+                    value=actividad_detalle_prev,
                 )
-                respuestas[qid] = respuesta.strip()
-        submitted = st.form_submit_button("Guardar Anamnesis", type="primary")
+            else:
+                actividad_detalle = ""
 
-    if not submitted:
-        return
+            st.markdown("### 🎯 Objetivos y motivación")
+            objetivo_principal = st.radio(
+                "¿Cuál es tu principal objetivo?",
+                objetivo_opciones,
+                index=_enum_index(objetivo_opciones, objetivo_prev),
+            )
+            objetivo_principal_otro = ""
+            if objetivo_principal == "Otro (especificar)":
+                objetivo_principal_otro = st.text_input(
+                    "Especifica tu objetivo",
+                    value=objetivo_otro_prev,
+                )
+            else:
+                objetivo_principal_otro = ""
 
-    faltantes = [p.get("titulo") or "Pregunta" for p in preguntas if not respuestas.get(p.get("id"))]
-    if faltantes:
-        st.warning("Completa todas las preguntas: " + ", ".join(faltantes))
-        return
+            expectativa = st.radio(
+                "¿Qué esperas lograr con la asesoría o tu experiencia en el gimnasio?",
+                expectativa_opciones,
+                index=_enum_index(expectativa_opciones, expectativa_prev),
+            )
+            expectativa_otro = ""
+            if expectativa == "Otro (especificar)":
+                expectativa_otro = st.text_input(
+                    "Especifica qué esperas lograr",
+                    value=expectativa_otro_prev,
+                )
+            else:
+                expectativa_otro = ""
 
-    ahora = datetime.utcnow()
-    respuestas_guardar = []
-    for pregunta in preguntas:
-        qid = pregunta.get("id") or uuid4().hex
-        respuestas_guardar.append({
-            "id": qid,
-            "pregunta": pregunta.get("titulo"),
-            "tipo": pregunta.get("tipo"),
-            "respuesta": respuestas.get(qid, ""),
-        })
+            if preguntas_personalizadas:
+                st.markdown("### 📝 Preguntas adicionales de tu coach")
+                for pregunta in preguntas_personalizadas:
+                    qid = pregunta.get("id") or uuid4().hex
+                    titulo = pregunta.get("titulo") or "Pregunta"
+                    tipo = pregunta.get("tipo") or QUESTION_TYPE_TEXTO
+                    tipo = tipo if tipo in (QUESTION_TYPE_TEXTO, QUESTION_TYPE_SELECCION) else QUESTION_TYPE_TEXTO
+                    key_base = f"custom_{qid}"
+                    if tipo == QUESTION_TYPE_SELECCION:
+                        opciones = pregunta.get("opciones") or []
+                        if not opciones:
+                            respuesta = st.text_input(
+                                titulo,
+                                value=prev_personalizadas.get(qid, ""),
+                                key=key_base,
+                            )
+                            respuestas_personalizadas_form[qid] = respuesta.strip()
+                        else:
+                            opciones_combo = ["— Selecciona —"] + opciones
+                            valor_prev = prev_personalizadas.get(qid, "")
+                            try:
+                                index = opciones_combo.index(valor_prev) if valor_prev else 0
+                            except ValueError:
+                                index = 0
+                            seleccion = st.selectbox(
+                                titulo,
+                                opciones_combo,
+                                index=index,
+                                key=key_base,
+                            )
+                            respuestas_personalizadas_form[qid] = "" if seleccion == "— Selecciona —" else seleccion
+                    else:
+                        respuesta = st.text_area(
+                            titulo,
+                            value=prev_personalizadas.get(qid, ""),
+                            key=key_base,
+                        )
+                        respuestas_personalizadas_form[qid] = respuesta.strip()
 
-    payload = {
-        "correo": correo_usuario,
-        "respuestas_personalizadas": respuestas_guardar,
-        "form_coach_owner": coach_owner,
-        "completado": True,
-        "ultima_actualizacion": ahora,
-        "fecha_actualizacion": ahora,
-    }
+            submitted = st.form_submit_button("Guardar Anamnesis", type="primary")
 
-    try:
-        doc_ref.set(payload, merge=True)
-        _desactivar_requisito_anamnesis(db, correo_usuario)
-        st.success("¡Gracias! Tu anamnesis fue guardada correctamente.")
-        st.session_state["anamnesis_completa"] = True
-        st.session_state["anamnesis_pendiente"] = False
-    except Exception as exc:  # pragma: no cover
-        st.error(f"No se pudo guardar la anamnesis personalizada: {exc}")
+        dias_seleccionados = sorted(set(dias_seleccionados_form))
+
+        if submitted:
+            errores = False
+            respuestas_personalizadas_guardar: list[dict[str, Any]] = []
+
+            fecha_nacimiento_value: Optional[date] = None
+            fecha_nacimiento_input_str = (fecha_nacimiento_input or "").strip()
+            if fecha_nacimiento_input_str:
+                try:
+                    fecha_nacimiento_value = datetime.strptime(
+                        fecha_nacimiento_input_str, "%d/%m/%Y"
+                    ).date()
+                except ValueError:
+                    st.warning("Ingresa la fecha de nacimiento con formato DD/MM/AAAA.")
+                    errores = True
+            else:
+                st.warning("La fecha de nacimiento es obligatoria.")
+                errores = True
+
+            if len(dias_seleccionados) != 2:
+                st.warning("Selecciona exactamente dos días para indicar tu rango de entrenamiento semanal.")
+                errores = True
+
+            if preguntas_personalizadas:
+                faltantes_personalizadas: list[str] = []
+                for pregunta in preguntas_personalizadas:
+                    qid = pregunta.get("id") or uuid4().hex
+                    titulo = pregunta.get("titulo") or "Pregunta"
+                    respuesta_val = (respuestas_personalizadas_form.get(qid) or "").strip()
+                    if not respuesta_val:
+                        faltantes_personalizadas.append(titulo)
+                    respuestas_personalizadas_guardar.append({
+                        "id": qid,
+                        "pregunta": titulo,
+                        "tipo": pregunta.get("tipo") or QUESTION_TYPE_TEXTO,
+                        "respuesta": respuesta_val,
+                    })
+                if faltantes_personalizadas:
+                    st.warning(
+                        "Completa todas las preguntas personalizadas: " + ", ".join(faltantes_personalizadas)
+                    )
+                    errores = True
+
+            if not errores:
+                dias_min, dias_max = dias_seleccionados
+                ahora = datetime.utcnow()
+                payload = {
+                    "correo": correo,
+                    "fecha_nacimiento": fecha_nacimiento_value.isoformat() if fecha_nacimiento_value else None,
+                    "condicion_medica": condicion_medica.strip(),
+                    "lesiones_cirugias": lesiones_cirugias.strip(),
+                    "suplementos_med": suplementos,
+                    "suplementos_med_detalle": suplementos_detalle.strip(),
+                    "tiempo_sesion": tiempo_sesion,
+                    "tiempo_ultimo_entrenamiento": ultimo_entrenamiento,
+                    "actividad_extra": actividad,
+                    "actividad_extra_detalle": actividad_detalle.strip(),
+                    "objetivo_principal": objetivo_principal,
+                    "objetivo_principal_otro": objetivo_principal_otro.strip(),
+                    "expectativa": expectativa,
+                    "expectativa_otro": expectativa_otro.strip(),
+                    "disponibilidad_semanal": {
+                        "min": int(dias_min),
+                        "max": int(dias_max),
+                    },
+                    "disponibilidad_semanal_min": int(dias_min),
+                    "disponibilidad_semanal_max": int(dias_max),
+                    "completado": True,
+                    "ultima_actualizacion": ahora,
+                    "fecha_actualizacion": ahora,
+                }
+                payload["objetivo"] = objetivo_principal_otro.strip() or objetivo_principal
+                payload["experiencia"] = ultimo_entrenamiento
+                payload["lesiones"] = lesiones_cirugias.strip()
+                payload["medicacion"] = suplementos_detalle.strip() if suplementos == "Sí" else ""
+                payload["habitos"] = condicion_medica.strip()
+                payload["comentarios"] = expectativa_otro.strip() or expectativa
+
+                if not datos_previos.get("creado_en"):
+                    payload["creado_en"] = ahora
+
+                if preguntas_personalizadas:
+                    payload["respuestas_personalizadas"] = respuestas_personalizadas_guardar
+                if coach_form_owner:
+                    payload["form_coach_owner"] = coach_form_owner
+
+                try:
+                    doc_ref.set(payload, merge=True)
+                    _desactivar_requisito_anamnesis(db, correo)
+                    st.success("¡Gracias! Tu anamnesis fue guardada correctamente.")
+                    st.session_state["anamnesis_completa"] = True
+                    st.session_state["anamnesis_pendiente"] = False
+                except Exception as exc:  # pragma: no cover
+                    st.error(f"No se pudo guardar la anamnesis: {exc}")
+
+        if es_gestor:
+            st.markdown("---")
+            _render_anamnesis_config(db, coach_form_owner or correo, formulario_personalizado)
+
+    if tab_respuestas is not None:
+        with tab_respuestas:
+            coach_filter = correo if rol_usuario in {"entrenador", "coach"} else None
+            _render_respuestas_deportistas(db, rol_usuario, coach_filter)
 
 
 def _render_anamnesis_config(
@@ -703,3 +708,171 @@ def _render_anamnesis_config(
         st.success("Formulario de anamnesis guardado correctamente.")
         st.session_state.pop(state_key, None)
         st.rerun()
+
+
+def _format_datetime_display(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.strftime("%d/%m/%Y %H:%M")
+    if isinstance(value, date):
+        return value.strftime("%d/%m/%Y")
+    if isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value)
+            return dt.strftime("%d/%m/%Y %H:%M")
+        except Exception:
+            return value
+    return ""
+
+
+def _format_fecha_display(value: Any) -> str:
+    parsed = _parse_fecha_guardada(value)
+    if parsed:
+        return parsed.strftime("%d/%m/%Y")
+    if isinstance(value, str):
+        return value
+    return "—"
+
+
+def _format_fecha_ddmmaaaa(value: Any) -> str:
+    parsed = _parse_fecha_guardada(value)
+    if parsed:
+        return parsed.strftime("%d/%m/%Y")
+    if isinstance(value, str) and value:
+        try:
+            # Intento directo por si ya viene en el formato esperado
+            datetime.strptime(value, "%d/%m/%Y")
+            return value
+        except Exception:
+            pass
+    return ""
+
+
+def _format_disponibilidad_texto(datos: dict[str, Any]) -> str:
+    disp = datos.get("disponibilidad_semanal")
+    minimo = None
+    maximo = None
+    if isinstance(disp, dict):
+        minimo = disp.get("min") or disp.get("minimo")
+        maximo = disp.get("max") or disp.get("maximo")
+    if minimo is None:
+        minimo = datos.get("disponibilidad_semanal_min")
+    if maximo is None:
+        maximo = datos.get("disponibilidad_semanal_max")
+    try:
+        minimo = int(minimo) if minimo is not None else None
+    except Exception:
+        minimo = None
+    try:
+        maximo = int(maximo) if maximo is not None else None
+    except Exception:
+        maximo = None
+    if minimo and maximo:
+        if minimo == maximo:
+            return f"{minimo} día(s) por semana"
+        return f"{minimo} a {maximo} días por semana"
+    if minimo:
+        return f"{minimo} día(s) por semana"
+    if maximo:
+        return f"{maximo} día(s) por semana"
+    return "—"
+
+
+def _render_resumen_respuestas(datos: dict[str, Any]) -> None:
+    base_fields = [
+        ("Fecha de nacimiento", _format_fecha_display(datos.get("fecha_nacimiento"))),
+        ("Condición médica", datos.get("condicion_medica") or "—"),
+        ("Lesiones o cirugías", datos.get("lesiones_cirugias") or datos.get("lesiones") or "—"),
+        (
+            "Suplementos/medicación",
+            (datos.get("suplementos_med") or "No")
+            + (
+                f" – {datos.get('suplementos_med_detalle')}"
+                if datos.get("suplementos_med_detalle")
+                else ""
+            ),
+        ),
+        ("Disponibilidad semanal", _format_disponibilidad_texto(datos)),
+        ("Tiempo por sesión", datos.get("tiempo_sesion") or "—"),
+        ("Último entrenamiento", datos.get("tiempo_ultimo_entrenamiento") or datos.get("experiencia") or "—"),
+        (
+            "Actividad extra",
+            (datos.get("actividad_extra") or "No")
+            + (f" – {datos.get('actividad_extra_detalle')}" if datos.get("actividad_extra_detalle") else ""),
+        ),
+        ("Objetivo principal", datos.get("objetivo_principal") or datos.get("objetivo") or "—"),
+        ("Expectativa", datos.get("expectativa") or datos.get("comentarios") or "—"),
+    ]
+
+    st.markdown("**Datos principales**")
+    for label, value in base_fields:
+        st.markdown(f"- **{label}:** {value if value else '—'}")
+
+    personalizados = datos.get("respuestas_personalizadas") or []
+    if personalizados:
+        st.markdown("**Preguntas personalizadas**")
+        for item in personalizados:
+            pregunta = item.get("pregunta") or item.get("titulo") or "Pregunta"
+            respuesta = item.get("respuesta") or "—"
+            st.markdown(f"• {pregunta}: {respuesta}")
+
+
+def _render_respuestas_deportistas(
+    db: firestore.Client,
+    rol_usuario: str,
+    coach_correo: Optional[str],
+) -> None:
+    st.subheader("📂 Respuestas de deportistas")
+    coach_norm = (coach_correo or "").strip().lower()
+    try:
+        snapshots = list(db.collection(COLLECTION_NAME).stream())
+    except Exception as exc:
+        st.error(f"No se pudieron leer las respuestas: {exc}")
+        return
+
+    registros: list[dict[str, Any]] = []
+    for snap in snapshots:
+        data = snap.to_dict() or {}
+        correo_dep = (data.get("correo") or snap.id or "").strip().lower()
+        if not correo_dep:
+            continue
+        usuario_meta = _obtener_usuario(db, correo_dep)
+        coach_resp = (usuario_meta.get("coach_responsable") or data.get("form_coach_owner") or "").strip().lower()
+        if coach_norm and rol_usuario not in {"admin", "administrador"}:
+            if coach_resp and coach_resp != coach_norm:
+                continue
+            if not coach_resp and coach_norm != correo_dep:
+                continue
+        registros.append({
+            "correo": correo_dep,
+            "nombre": usuario_meta.get("nombre")
+            or usuario_meta.get("primer_nombre")
+            or data.get("nombre")
+            or correo_dep.split("@")[0].title(),
+            "coach": coach_resp,
+            "ultima_actualizacion": data.get("ultima_actualizacion") or data.get("fecha_actualizacion"),
+            "datos": data,
+        })
+
+    if not registros:
+        st.info("Aún no hay respuestas registradas.")
+        return
+
+    registros.sort(key=lambda r: r.get("ultima_actualizacion") or datetime.min, reverse=True)
+
+    busqueda = st.text_input("Buscar deportista", placeholder="Correo o nombre")
+    if busqueda:
+        q = busqueda.strip().lower()
+        registros = [r for r in registros if q in r["correo"] or q in (r["nombre"] or "").lower()]
+        if not registros:
+            st.info("No se encontraron coincidencias con esa búsqueda.")
+            return
+
+    for registro in registros:
+        header = f"{registro['nombre']} · {registro['correo']}"
+        if registro.get("coach"):
+            header += f" — Coach: {registro['coach']}"
+        ultima_txt = _format_datetime_display(registro.get("ultima_actualizacion"))
+        with st.expander(header, expanded=False):
+            if ultima_txt:
+                st.caption(f"Última actualización: {ultima_txt}")
+            _render_resumen_respuestas(registro["datos"])

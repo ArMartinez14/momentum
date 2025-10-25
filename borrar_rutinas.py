@@ -3,6 +3,14 @@ from firebase_admin import credentials, firestore
 import firebase_admin
 import json
 
+from app_core.utils import (
+    empresa_de_usuario,
+    EMPRESA_MOTION,
+    EMPRESA_ASESORIA,
+    EMPRESA_DESCONOCIDA,
+    correo_a_doc_id,
+)
+
 # === INICIALIZAR FIREBASE con secretos ===
 if not firebase_admin._apps:
     cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
@@ -23,6 +31,36 @@ def borrar_rutinas():
     correo_raw = correo_input.strip()
     raw_lower = correo_raw.lower()
     correo_norm = correo_raw.replace("@", "_").replace(".", "_").lower()
+
+    # Validar permisos según empresa/coach
+    correo_login = (st.session_state.get("correo") or "").strip().lower()
+    rol_login = (st.session_state.get("rol") or "").strip().lower()
+    empresa_login = empresa_de_usuario(correo_login) if correo_login else EMPRESA_DESCONOCIDA
+
+    target_doc = db.collection("usuarios").document(correo_a_doc_id(raw_lower)).get()
+    target_data = target_doc.to_dict() or {}
+    coach_cli = (target_data.get("coach_responsable") or "").strip().lower()
+    empresa_cli = empresa_de_usuario(raw_lower)
+
+    permitido = True
+    if rol_login in ("entrenador",):
+        if empresa_login == EMPRESA_ASESORIA:
+            permitido = coach_cli == correo_login
+        elif empresa_login == EMPRESA_MOTION:
+            if empresa_cli == EMPRESA_MOTION:
+                permitido = True
+            elif empresa_cli == EMPRESA_DESCONOCIDA:
+                permitido = coach_cli == correo_login
+            else:
+                permitido = False
+        else:
+            permitido = coach_cli == correo_login
+    elif rol_login not in ("admin", "administrador"):
+        permitido = coach_cli == correo_login
+
+    if not permitido:
+        st.error("No tienes permisos para borrar rutinas de este cliente.")
+        return
 
     # Buscaremos en estas colecciones
     colecciones = ["rutinas", "rutinas_semanales"]
