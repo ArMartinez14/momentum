@@ -5,6 +5,8 @@ from herramientas import aplicar_progresion, normalizar_texto
 import streamlit as st
 import uuid
 from app_core.firebase_client import get_db
+from app_core.email_notifications import enviar_correo_rutina_disponible
+from app_core.utils import empresa_de_usuario
 
 # -------------------------
 # Helpers de conversión
@@ -429,5 +431,18 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                 db.collection("rutinas_semanales").document(doc_id).set(rutina_semana)
 
         st.success(f"✅ Rutina generada correctamente para {semanas} semanas (progresión acumulativa + descanso + RIR min/max + series).")
+        empresa_cliente = empresa_de_usuario(correo)
+        envio_ok = enviar_correo_rutina_disponible(
+            correo=correo,
+            nombre=nombre_sel,
+            fecha_inicio=fecha_inicio,
+            semanas=semanas,
+            empresa=empresa_cliente,
+            coach=entrenador,
+        )
+        if envio_ok:
+            st.caption("El cliente fue notificado por correo con su bloque actualizado.")
+        else:
+            st.caption("No se pudo enviar el aviso por correo; revisa la configuración de notificaciones.")
     except Exception as e:
         st.error(f"❌ Error al guardar la rutina: {e}")
