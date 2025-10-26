@@ -77,8 +77,7 @@ label,p,span,div{{ color:var(--text-main); }}
   padding:14px 18px;
   box-shadow:0 26px 52px -32px rgba(0,0,0,0.5);
 }}
-.h-accent {{ position:relative; padding-left:10px; margin:8px 0 6px; font-weight:700; color:var(--text-main); }}
-.h-accent:before {{ content:""; position:absolute; left:0; top:2px; bottom:2px; width:4px; border-radius:3px; background:var(--primary); }}
+.h-accent {{ position:relative; padding-left:0; margin:8px 0 6px; font-weight:700; color:var(--text-main); }}
 
 /* Hero / session layouts */
 .hero-card {{
@@ -142,6 +141,24 @@ label,p,span,div{{ color:var(--text-main); }}
   gap:12px;
 }}
 .nav-mobile__items > div {{ flex:1 1 calc(33.333% - 12px); min-width:0; }}
+
+button[data-testid="baseButton-secondary"] {{
+  color:#FFF9F6 !important;
+  font-weight:700 !important;
+}}
+.top-actions button[data-testid="baseButton-secondary"] {{
+  color:var(--text-main) !important;
+  font-weight:600 !important;
+}}
+
+@media (prefers-color-scheme: light) {{
+  .nav-desktop .stButton>button,
+  .nav-mobile__items button,
+  button[data-testid="baseButton-secondary"] {{
+    color:#FFFFFF !important;
+    font-weight:700 !important;
+  }}
+}}
 
 @media (min-width: 1024px) {{
   .nav-mobile {{ display:none; }}
