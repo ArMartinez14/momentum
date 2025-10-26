@@ -1811,6 +1811,7 @@ def crear_rutinas():
                 int(semanas),
                 dias_labels,
                 objetivo=objetivo_val,
+                ejercicios_meta=ejercicios_dict,
             )
             st.session_state.pop("rutina_borrador_activo_id", None)
             st.session_state.pop("rutina_borrador_activo_cliente", None)

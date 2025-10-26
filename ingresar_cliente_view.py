@@ -279,9 +279,13 @@ def _render_menu():
             _set_mode("ejercicio"); st.rerun()
 
     with colC:
-        if st.button("📤\n### Importar Ejercicios\nCarga un archivo CSV para crear ejercicios.",
-                     key="card_carga", use_container_width=True):
-            _set_mode("carga_csv"); st.rerun()
+        if es_admin():
+            if st.button(
+                "📤\n### Importar Ejercicios\nCarga un archivo CSV para crear ejercicios.",
+                key="card_carga",
+                use_container_width=True,
+            ):
+                _set_mode("carga_csv"); st.rerun()
 
     # 🔥 estilos para que parezcan tarjetas
     st.markdown(f"""
@@ -730,6 +734,9 @@ def _render_carga_csv():
                 patron = _val("patron de movimiento", "patron_de_movimiento", "patron")
                 grupo_p = _val("grupo muscular principal", "grupo_muscular_principal")
                 grupo_s = _val("grupo muscular secundario", "grupo_muscular_secundario")
+                video = _val("video", "link_video", "url_video", "youtube", "link")
+                entrenador_csv = _val("entrenador", "coach")
+                creado_por_csv = _val("creado_por", "creado por", "created_by")
 
                 nombre = _val("nombre")
                 if not nombre:
@@ -753,6 +760,11 @@ def _render_carga_csv():
                 id_impl = _resolver_id_implemento(db, marca, maquina)
                 doc_id = normalizar_texto(nombre)
 
+                entrenador_final = (entrenador_csv or creado_por_csv or correo_usuario).strip().lower()
+                if not entrenador_final:
+                    entrenador_final = correo_usuario
+                creado_por_final = (creado_por_csv or entrenador_final or correo_usuario).strip().lower()
+
                 payload = {
                     "nombre": nombre,
                     "marca": marca,
@@ -766,12 +778,14 @@ def _render_carga_csv():
                     "publico": bool(publico),
                     "actualizado_por": correo_usuario,
                     "fecha_actualizacion": datetime.utcnow(),
-                    "entrenador": correo_usuario,
+                    "entrenador": entrenador_final,
                 }
+                if video:
+                    payload["video"] = video
 
                 db.collection("ejercicios").document(doc_id).set({
                     **payload,
-                    "creado_por": correo_usuario,
+                    "creado_por": creado_por_final,
                     "fecha_creacion": datetime.utcnow(),
                 }, merge=True)
                 guardados += 1
@@ -797,7 +811,11 @@ def ingresar_cliente_o_video_o_ejercicio():
     elif mode == "ejercicio":
         _render_ejercicio()
     elif mode == "carga_csv":
-        _render_carga_csv()
+        if es_admin():
+            _render_carga_csv()
+        else:
+            st.error("Solo los administradores pueden importar ejercicios masivamente.")
+            _set_mode("menu")
     else:
         _set_mode("menu"); _render_menu()
 

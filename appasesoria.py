@@ -394,6 +394,7 @@ with header:
             """,
             unsafe_allow_html=True,
         )
+        st.markdown("<div class='top-actions'>", unsafe_allow_html=True)
 
         if st.button(
             "Cerrar sesión",
@@ -423,6 +424,7 @@ with header:
                 use_container_width=True,
             ):
                 _goto("Inicio")
+        st.markdown("</div>", unsafe_allow_html=True)
 
 _render_navigation(opciones_menu, menu_actual)
 
