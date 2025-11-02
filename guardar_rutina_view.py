@@ -77,6 +77,58 @@ def parsear_semanas(semanas_txt: str) -> list[int]:
         return []
 
 
+def _default_cardio_data() -> dict:
+    return {
+        "tipo": "LISS",
+        "modalidad": "",
+        "indicaciones": "",
+        "series": "",
+        "intervalos": "",
+        "tiempo_trabajo": "",
+        "intensidad_trabajo": "",
+        "tiempo_descanso": "",
+        "tipo_descanso": "",
+        "intensidad_descanso": "",
+    }
+
+
+def _normalizar_cardio_data(cardio: dict | None) -> dict:
+    data = _default_cardio_data()
+    if isinstance(cardio, dict):
+        for key in data:
+            value = cardio.get(key, data[key])
+            if isinstance(value, str):
+                data[key] = value.strip()
+            else:
+                data[key] = value
+    if data["tipo"] not in {"LISS", "HIIT"}:
+        data["tipo"] = "LISS"
+    return data
+
+
+def _cardio_tiene_datos(cardio: dict | None) -> bool:
+    if not isinstance(cardio, dict):
+        return False
+    for campo in (
+        "modalidad",
+        "indicaciones",
+        "series",
+        "intervalos",
+        "tiempo_trabajo",
+        "intensidad_trabajo",
+        "tiempo_descanso",
+        "tipo_descanso",
+        "intensidad_descanso",
+    ):
+        valor = cardio.get(campo, "")
+        if isinstance(valor, str):
+            if valor.strip():
+                return True
+        elif valor not in (None, ""):
+            return True
+    return False
+
+
 def _listar_ejercicios_de_dia(data):
     if isinstance(data, list):
         return [e for e in data if isinstance(e, dict)]
@@ -339,11 +391,18 @@ def guardar_rutina(
             series_por_categoria_semana: dict[str, defaultdict[str, float]] = {
                 campo: defaultdict(float) for campo in campos_series_categoria
             }
+            cardio_semana: dict[str, dict] = {}
 
             # Recorre los días definidos en la UI (Día 1..5)
             for i, _dia_label in enumerate(dias):
                 numero_dia = i + 1
                 lista_ejercicios = []
+                cardio_key = f"rutina_dia_{i + 1}_Cardio"
+                cardio_info = None
+                if cardio_key in st.session_state:
+                    cardio_tmp = _normalizar_cardio_data(st.session_state.get(cardio_key))
+                    if _cardio_tiene_datos(cardio_tmp):
+                        cardio_info = cardio_tmp
 
                 for seccion in ["Warm Up", "Work Out"]:
                     dia_key = f"rutina_dia_{i + 1}_{seccion.replace(' ', '_')}"
@@ -522,6 +581,8 @@ def guardar_rutina(
                 if lista_ejercicios:
                     # Firestore solo acepta claves string en mapas, por eso guardamos el número de día como texto
                     rutina_semana["rutina"][str(numero_dia)] = lista_ejercicios
+                if cardio_info:
+                    cardio_semana[str(numero_dia)] = cardio_info
 
             series_por_categoria_payload = {
                 campo: [
@@ -536,6 +597,8 @@ def guardar_rutina(
             }
             if series_por_categoria_payload:
                 rutina_semana["series_por_categoria"] = series_por_categoria_payload
+            if cardio_semana:
+                rutina_semana["cardio"] = cardio_semana
 
             if rutina_semana["rutina"]:
                 doc_id = f"{correo_norm}_{fecha_norm}"

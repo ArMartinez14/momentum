@@ -472,16 +472,20 @@ def _render_cliente():
                 db.collection("usuarios").document(doc_id).set(data)
                 st.success(f"✅ Cliente '{nombre_completo}' guardado correctamente")
                 try:
-                    envio_ok = enviar_correo_bienvenida(
-                        correo=correo_limpio,
-                        nombre=nombre_completo,
-                        empresa=empresa_seleccionada,
-                        rol=rol,
-                    )
-                    if envio_ok:
-                        st.caption("Se envió un correo de bienvenida con instrucciones de acceso.")
+                    empresa_coach = empresa_de_usuario(coach_responsable)
+                    if not (empresa_seleccionada == EMPRESA_MOTION and empresa_coach == EMPRESA_MOTION):
+                        envio_ok = enviar_correo_bienvenida(
+                            correo=correo_limpio,
+                            nombre=nombre_completo,
+                            empresa=empresa_seleccionada,
+                            rol=rol,
+                        )
+                        if envio_ok:
+                            st.caption("Se envió un correo de bienvenida con instrucciones de acceso.")
+                        else:
+                            st.caption("No se pudo enviar el correo de bienvenida; revisa la configuración de notificaciones.")
                     else:
-                        st.caption("No se pudo enviar el correo de bienvenida; revisa la configuración de notificaciones.")
+                        st.caption("Cliente creado sin correo de bienvenida (política Motion).")
                 except Exception as exc_envio:
                     st.caption(f"Cliente creado, pero falló el envío de bienvenida: {exc_envio}")
             except Exception as e:

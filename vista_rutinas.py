@@ -161,7 +161,7 @@ st.markdown(
     .planner-card__meta.muted {
         color: var(--muted);
     }
-.planner-card__badge {
+    .planner-card__badge {
         display: inline-flex;
         align-items: center;
         gap: 6px;
@@ -217,6 +217,154 @@ st.markdown(
     div[data-testid="stButton"][data-key^="daybtn_"] button[kind="primary"] {
         background: linear-gradient(135deg, rgba(226, 94, 80, 0.95), rgba(148, 28, 22, 0.9)) !important;
         color: #FFF6F4 !important;
+    }
+    .center-text {
+        text-align: center;
+    }
+    .routine-view {
+        max-width: 720px;
+        margin-left: auto;
+        margin-right: auto;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+    }
+    .routine-view > * {
+        width: 100%;
+    }
+    .routine-view div[data-testid="stCheckbox"] {
+        display: flex;
+        justify-content: center;
+    }
+    .routine-view div[data-testid="stCheckbox"] label {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+    }
+    .routine-day {
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+    .routine-day h3,
+    .routine-day h4 {
+        text-align: center;
+        width: 100%;
+    }
+    .routine-day h5,
+    .routine-day h6 {
+        text-align: center;
+        width: 100%;
+    }
+    .routine-day__circuit {
+        margin-bottom: 24px;
+        width: min(640px, 100%);
+        margin-left: auto;
+        margin-right: auto;
+    }
+    .routine-day .exercise-block {
+        margin: 12px auto;
+        text-align: center;
+        width: 100%;
+    }
+    .routine-day .exercise-details {
+        text-align: center;
+        display: inline-flex;
+        justify-content: center;
+        width: 100%;
+    }
+    .routine-day .exercise-details span {
+        display: inline-block;
+    }
+    .routine-day .comment-card {
+        text-align: center;
+        display: inline-block;
+        max-width: 100%;
+    }
+    .routine-day .h-accent {
+        padding-left: 0;
+        display: inline-block;
+        margin-left: auto;
+        margin-right: auto;
+        text-align: center;
+    }
+    .routine-day .h-accent:before {
+        display: none;
+    }
+    .routine-day div[data-testid="stButton"] {
+        display: flex;
+        justify-content: center;
+    }
+    .routine-day div[data-testid="stButton"] button {
+        margin: 0 auto;
+        width: auto !important;
+        min-width: 200px;
+        max-width: 360px;
+    }
+    .routine-day div[data-testid="stButton"][data-key^="video_btn_"] button {
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+        padding-left: 24px;
+        padding-right: 24px;
+    }
+    .routine-report-grid {
+        width: 100%;
+    }
+    .routine-report-grid__title {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-weight: 600;
+        color: var(--muted);
+        text-align: center;
+        margin-bottom: 4px;
+    }
+    .routine-report-grid__serie {
+        font-weight: 600;
+        color: var(--text-main);
+        text-align: center;
+        padding: 6px 0 4px;
+    }
+    .routine-caption {
+        font-size: 0.82rem;
+        color: var(--muted);
+        text-align: center;
+        margin-top: 4px;
+    }
+    .routine-day__report {
+        margin-top: 24px;
+        text-align: center;
+        width: min(640px, 100%);
+        margin-left: auto;
+        margin-right: auto;
+    }
+    .routine-day__report .stTextInput > label {
+        text-align: center;
+        width: 100%;
+    }
+    .routine-day [data-testid="stSlider"] label {
+        width: 100%;
+        text-align: center;
+        font-weight: 600;
+    }
+    .routine-day [data-testid="stSlider"] div[data-baseweb="slider"] {
+        margin-left: auto;
+        margin-right: auto;
+    }
+    .routine-cta {
+        text-align: center;
+        margin-top: 18px;
+        width: min(480px, 100%);
+        margin-left: auto;
+        margin-right: auto;
+    }
+    .routine-cta div[data-testid="stButton"] {
+        display: flex;
+        justify-content: center;
     }
     </style>
     """,
@@ -595,6 +743,43 @@ def _aplicar_delta_en_dia(dia_data, ejercicio_ref, delta, peso_base_ref):
                     changed = True
     return changed
 
+
+def _asignar_peso_si_vacio(dia_data, ejercicio_ref, nuevo_peso_str):
+    def _actualizar_ex(ex):
+        if not isinstance(ex, dict):
+            return False
+        if not _match_mismo_ejercicio(ex, ejercicio_ref):
+            return False
+        peso_actual = ex.get("peso")
+        if not str(peso_actual or "").strip():
+            peso_actual = ex.get("Peso")
+        if str(peso_actual or "").strip():
+            return False
+        ex["peso"] = nuevo_peso_str
+        ex["Peso"] = nuevo_peso_str
+        return True
+
+    changed = False
+
+    if isinstance(dia_data, list):
+        for ex in dia_data:
+            if _actualizar_ex(ex):
+                changed = True
+    elif isinstance(dia_data, dict):
+        ejercicios = None
+        if isinstance(dia_data.get("ejercicios"), list):
+            ejercicios = dia_data["ejercicios"]
+        if ejercicios is not None:
+            for ex in ejercicios:
+                if _actualizar_ex(ex):
+                    changed = True
+        else:
+            for key, ex in dia_data.items():
+                if isinstance(ex, dict) and _actualizar_ex(ex):
+                    dia_data[key] = ex
+                    changed = True
+    return changed
+
 def _propagar_peso_a_futuras_semanas(db, correo_original, bloque_rutina, semana_sel, dia_sel, ejercicio_editado, delta, peso_base_ref):
     if not correo_original or not bloque_rutina:
         return
@@ -634,6 +819,49 @@ def _propagar_peso_a_futuras_semanas(db, correo_original, bloque_rutina, semana_
             except Exception:
                 continue
 
+
+def _propagar_peso_a_futuras_semanas_sin_base(db, correo_original, bloque_rutina, semana_sel, dia_sel, ejercicio_editado, nuevo_peso_val):
+    if not correo_original or not bloque_rutina:
+        return
+    if nuevo_peso_val is None:
+        return
+    dia_sel = str(dia_sel)
+    nuevo_peso_str = _format_peso_value(float(nuevo_peso_val))
+    if not nuevo_peso_str:
+        return
+    try:
+        snaps = list(
+            db.collection("rutinas_semanales")
+              .where("correo", "==", correo_original)
+              .where("bloque_rutina", "==", bloque_rutina)
+              .stream()
+        )
+    except Exception:
+        return
+
+    futuros = []
+    for snap in snaps:
+        data = snap.to_dict() or {}
+        fecha = data.get("fecha_lunes")
+        if not fecha or fecha <= semana_sel:
+            continue
+        futuros.append((fecha, snap, data))
+
+    if not futuros:
+        return
+
+    futuros.sort(key=lambda tup: tup[0])
+    for _, snap, data in futuros:
+        rutina = data.get("rutina", {}) or {}
+        if dia_sel not in rutina:
+            continue
+        dia_data = rutina[dia_sel]
+        if _asignar_peso_si_vacio(dia_data, ejercicio_editado, nuevo_peso_str):
+            try:
+                snap.reference.set({"rutina": {dia_sel: dia_data}}, merge=True)
+            except Exception:
+                continue
+
 def guardar_reporte_ejercicio(db, correo_cliente_norm, correo_original, semana_sel, dia_sel, ejercicio_editado, bloque_rutina=None):
     fecha_norm = semana_sel.replace("-", "_")
     doc_id = f"{correo_cliente_norm}_{fecha_norm}"
@@ -649,25 +877,45 @@ def guardar_reporte_ejercicio(db, correo_cliente_norm, correo_original, semana_s
         if _match_mismo_ejercicio(ex, ejercicio_editado):
             ejercicios_lista[i] = ejercicio_editado; changed = True; break
     if not changed: ejercicios_lista.append(ejercicio_editado)
-    doc_ref.set({"rutina": {dia_sel: ejercicios_lista}}, merge=True)
-
     peso_base_ref = _peso_to_float(ejercicio_editado.get("peso"))
+    if peso_base_ref is None:
+        peso_base_ref = _peso_to_float(ejercicio_editado.get("Peso"))
     peso_alcanzado_val = ejercicio_editado.get("peso_alcanzado")
     if peso_alcanzado_val is None:
         peso_alcanzado_val, _, _ = _parsear_series(ejercicio_editado.get("series_data", []))
-    if peso_base_ref is not None and peso_alcanzado_val is not None:
-        delta = float(peso_alcanzado_val) - float(peso_base_ref)
-        if abs(delta) >= 1e-4:
-            _propagar_peso_a_futuras_semanas(
+    peso_alcanzado_float = float(peso_alcanzado_val) if peso_alcanzado_val is not None else None
+    if peso_base_ref is None and peso_alcanzado_float is not None:
+        peso_formateado = _format_peso_value(peso_alcanzado_float)
+        if peso_formateado:
+            ejercicio_editado["peso"] = peso_formateado
+            ejercicio_editado["Peso"] = peso_formateado
+
+    doc_ref.set({"rutina": {dia_sel: ejercicios_lista}}, merge=True)
+
+    if peso_alcanzado_float is not None:
+        if peso_base_ref is None:
+            _propagar_peso_a_futuras_semanas_sin_base(
                 db=db,
                 correo_original=correo_original,
                 bloque_rutina=bloque_rutina,
                 semana_sel=semana_sel,
                 dia_sel=dia_sel,
                 ejercicio_editado=ejercicio_editado,
-                delta=delta,
-                peso_base_ref=peso_base_ref,
+                nuevo_peso_val=peso_alcanzado_float,
             )
+        else:
+            delta = float(peso_alcanzado_float) - float(peso_base_ref)
+            if abs(delta) >= 1e-4:
+                _propagar_peso_a_futuras_semanas(
+                    db=db,
+                    correo_original=correo_original,
+                    bloque_rutina=bloque_rutina,
+                    semana_sel=semana_sel,
+                    dia_sel=dia_sel,
+                    ejercicio_editado=ejercicio_editado,
+                    delta=delta,
+                    peso_base_ref=peso_base_ref,
+                )
 
     return True
 
@@ -1240,6 +1488,8 @@ def ver_rutinas():
     if not dia_sel:
         st.info("Selecciona un día en las tarjetas superiores para ver tu rutina.")
         st.stop()
+
+    st.markdown("<div class='routine-view'>", unsafe_allow_html=True)
     # Checkbox global de Sesión anterior
     mostrar_prev = st.checkbox(
         "📅 Mostrar sesión anterior",
@@ -1261,7 +1511,7 @@ def ver_rutinas():
                 ejercicios_prev_map[key_prev] = ex
 
     # Ejercicios del día
-    st.markdown(f"<h3 class='h-accent'>Ejercicios del día {dia_sel}</h3>", unsafe_allow_html=True)
+    st.markdown(f"<h3 class='h-accent center-text'>Ejercicios del día {dia_sel}</h3>", unsafe_allow_html=True)
     ejercicios = obtener_lista_ejercicios(rutina_doc["rutina"][dia_sel])
     ejercicios.sort(key=ordenar_circuito)
 
@@ -1270,16 +1520,19 @@ def ver_rutinas():
         circuito = (e.get("circuito","Z") or "Z").upper()
         ejercicios_por_circuito.setdefault(circuito, []).append(e)
 
-    for circuito, lista in sorted(ejercicios_por_circuito.items()):
-        titulo = "Warm-Up" if circuito=="A" else ("Workout" if circuito=="D" else f"Circuito {circuito}")
-        st.markdown(f"<h4 class='h-accent'>{titulo}</h4>", unsafe_allow_html=True)
+    # === Render de ejercicios (nombre como botón si hay video; 'detalle' puede traer link) ===
+    st.markdown("<div class='routine-day' style='text-align:center;'>", unsafe_allow_html=True)
 
-        # === Render de ejercicios (nombre como botón si hay video; 'detalle' puede traer link) ===
+    for circuito, lista in sorted(ejercicios_por_circuito.items()):
+        titulo = "Warm-Up" if circuito == "A" else ("Workout" if circuito == "D" else f"Circuito {circuito}")
+        st.markdown("<div class='routine-day__circuit' style='text-align:center;'>", unsafe_allow_html=True)
+        st.markdown(f"<h4 class='h-accent center-text' style='text-align:center;'>{titulo}</h4>", unsafe_allow_html=True)
+
         for idx, e in enumerate(lista):
             nombre    = e.get("ejercicio", f"Ejercicio {idx+1}")
-            peso      = e.get("peso","")
-            tiempo    = e.get("tiempo","")
-            velocidad = e.get("velocidad","")
+            peso      = e.get("peso", "")
+            tiempo    = e.get("tiempo", "")
+            velocidad = e.get("velocidad", "")
 
             # 1) Video (puede venir en e['video'] o dentro de 'detalle' como link)
             video_url, detalle_visible = _video_y_detalle_desde_ejercicio(e)
@@ -1291,51 +1544,64 @@ def ver_rutinas():
             if velocidad: partes.append(f"{velocidad} m/s")
             dsc = _descanso_texto(e)
             if dsc:       partes.append(f"{dsc}")
+            rir_text = _rirstr(e)
+            if rir_text:  partes.append(f"RIR {rir_text}")
 
-            rir_text = _rirstr(e)           # ← usa la nueva función
-            if rir_text:
-                partes.append(f"RIR {rir_text}")
+            # 3) Texto de detalle (centrado)
+            info_str = f"""
+            <p style='text-align:center;
+                    color:#e5e5e5;
+                    font-size:0.95rem;
+                    margin-top:6px;
+                    margin-bottom:0;
+                    letter-spacing:0.5px;'>
+                {' · '.join(partes)}
+            </p>
+            """
 
-            info_str = " · ".join(partes)
+            # 4) Contenedor del ejercicio (centrado)
+            st.markdown("<div class='exercise-block' style='margin:12px 0; text-align:center;'>", unsafe_allow_html=True)
 
-            # 3) Contenedor visual
-            st.markdown("<div style='margin:12px 0;'>", unsafe_allow_html=True)
-
-            # 3.a) Título (si hay video -> el nombre es botón; si no -> texto)
+            # 🔹 Nombre del ejercicio (botón centrado si hay video; texto si no)
             video_btn_key = f"video_btn_{cliente_sel}_{semana_sel}_{circuito}_{idx}"
             mostrar_video_key = f"mostrar_video_{cliente_sel}_{semana_sel}_{circuito}_{idx}"
 
             if video_url:
                 titulo_btn = nombre if not detalle_visible else f"{nombre} — {detalle_visible}"
-                btn_clicked = st.button(
-                    titulo_btn,
-                    key=video_btn_key,
-                    type="primary",
-                    help="Click para mostrar/ocultar video",
-                )
+                # 👉 Centrado robusto con columnas
+                _, center_col, _ = st.columns([1, 2, 1])
+                with center_col:
+                    btn_clicked = st.button(
+                        titulo_btn,
+                        key=video_btn_key,
+                        type="primary",
+                        use_container_width=True,
+                        help="Click para mostrar/ocultar video",
+                    )
                 if btn_clicked:
                     st.session_state[mostrar_video_key] = not st.session_state.get(mostrar_video_key, False)
             else:
                 titulo_linea = nombre + (f" — {detalle_visible}" if detalle_visible else "")
                 st.markdown(
-                    f"<div style='font-weight:800;font-size:1.05rem;color:var(--text-main);'>{titulo_linea}</div>",
+                    f"<div style='font-weight:800; font-size:1.05rem; color:var(--text-main); text-align:center;'>{titulo_linea}</div>",
                     unsafe_allow_html=True
                 )
 
-            # 3.b) Línea de detalles (incluye ahora también el RIR)
-            st.markdown(f"<div class='muted' style='margin-top:2px;'>{info_str}</div>", unsafe_allow_html=True)
+            # 🔹 Línea de detalles centrada
+            st.markdown(info_str, unsafe_allow_html=True)
 
+            # 🔹 Comentario centrado
             comentario_cliente = (e.get("comentario", "") or "").strip()
             if comentario_cliente:
                 st.markdown(
-                    f"<div style='margin-top:6px; padding:10px 12px; border-left:3px solid var(--primary); background:rgba(15,23,42,0.35); border-radius:8px;'>"
+                    f"<div class='comment-card' style='margin-top:6px; padding:10px 12px; border-left:3px solid var(--primary); background:rgba(15,23,42,0.35); border-radius:8px; text-align:center;'>"
                     f"<div style='font-size:0.85rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;'>Comentario del deportista</div>"
                     f"<div style='font-size:0.96rem; color:var(--text-main); margin-top:4px;'>{html.escape(comentario_cliente)}</div>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
 
-            # 3.c) Mostrar video embebido si está activo
+            # 🔹 Video embebido centrado
             if video_url and st.session_state.get(mostrar_video_key, False):
                 url = video_url
                 if "youtube.com/shorts/" in url:
@@ -1344,11 +1610,13 @@ def ver_rutinas():
                         url = f"https://www.youtube.com/watch?v={video_id}"
                     except:
                         pass
-                st.video(url)
+                _, vcol, _ = st.columns([1, 2, 1])
+                with vcol:
+                    st.video(url)
 
-            st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)  # cierre exercise-block ✅
 
-            # 4) Sesión anterior (misma lógica de siempre)
+            # 5) Sesión anterior (opcional)
             if mostrar_prev:
                 key_prev = ((e.get("bloque") or e.get("seccion") or "").strip().lower(),
                             (e.get("circuito") or "").strip().upper(),
@@ -1363,28 +1631,40 @@ def ver_rutinas():
                     if reps_prev not in ("",None): info_prev.append(f"Reps: {reps_prev}")
                     if peso_prev not in ("",None): info_prev.append(f"Peso: {peso_prev}")
                     if rir_prev  not in ("",None): info_prev.append(f"RIR: {rir_prev}")
-                    st.caption(" | ".join(info_prev) if info_prev else "Sin datos guardados.")
+                    caption_text = " | ".join(info_prev) if info_prev else "Sin datos guardados."
+                    st.markdown(f"<div class='routine-caption'>{html.escape(caption_text)}</div>", unsafe_allow_html=True)
                 else:
-                    st.caption("Sin coincidencias para este ejercicio.")
+                    st.markdown("<div class='routine-caption'>Sin coincidencias para este ejercicio.</div>", unsafe_allow_html=True)
+
+            # ⬅️ CERRAR el circuito **después** de terminar TODOS los ejercicios
+            st.markdown("</div>", unsafe_allow_html=True)  # cierre routine-day__circuit ✅
+
+        # ⬅️ CERRAR el contenedor general del día **después** de todos los circuitos
+        st.markdown("</div>", unsafe_allow_html=True)      # cierre routine-day ✅
 
         # ==========================
         #  🔁 BOTÓN "📝 Reporte {circuito}" (REINTEGRADO)
         # ==========================
-        # Alineado a la izquierda con columnas
-        rc_cols = st.columns([1, 6])
-        with rc_cols[0]:
+        rc_cols = st.columns([1, 2, 1])
+        with rc_cols[1]:
             toggle_key = f"mostrar_reporte_{cliente_sel}_{semana_sel}_{circuito}"
             if toggle_key not in st.session_state:
                 st.session_state[toggle_key] = False
-            if st.button(f"📝 Reporte {circuito}", key=f"btn_reporte_{cliente_sel}_{semana_sel}_{circuito}", type="secondary"):
+            if st.button(
+                f"📝 Reporte {circuito}",
+                key=f"btn_reporte_{cliente_sel}_{semana_sel}_{circuito}",
+                type="secondary",
+                use_container_width=True,
+            ):
                 st.session_state[toggle_key] = not st.session_state[toggle_key]
 
         if st.session_state.get(toggle_key, False):
-            st.markdown(f"### 📋 Registro del circuito {circuito}")
+            st.markdown("<div class='routine-day__report'>", unsafe_allow_html=True)
+            st.markdown(f"<h4 class='center-text'>📋 Registro del circuito {circuito}</h4>", unsafe_allow_html=True)
             for idx, e in enumerate(lista):
                 ejercicio_nombre = e.get("ejercicio", f"Ejercicio {idx+1}")
                 ejercicio_id = f"{cliente_sel}_{semana_sel}_{circuito}_{ejercicio_nombre}_{idx}".lower()
-                st.markdown(f"#### {ejercicio_nombre}")
+                st.markdown(f"<h5 class='center-text'>{ejercicio_nombre}</h5>", unsafe_allow_html=True)
 
                 # Inicializa/asegura series_data con defaults
                 try:
@@ -1405,26 +1685,37 @@ def ver_rutinas():
                             s["rir"] = rir_def
 
                 # Inputs por serie
+                grid_template = [0.3, 0.5, 0.5, 0.5]
+                header_cols = st.columns(grid_template)
+                header_cols[0].markdown("<div class='routine-report-grid__title'>Series</div>", unsafe_allow_html=True)
+                header_cols[1].markdown("<div class='routine-report-grid__title'>Repeticiones</div>", unsafe_allow_html=True)
+                header_cols[2].markdown("<div class='routine-report-grid__title'>Peso</div>", unsafe_allow_html=True)
+                header_cols[3].markdown("<div class='routine-report-grid__title'>RIR</div>", unsafe_allow_html=True)
+
                 for s_idx in range(num_series):
-                    st.markdown(f"**Serie {s_idx + 1}**")
-                    s_cols = st.columns(3)
-                    e["series_data"][s_idx]["reps"] = s_cols[0].text_input(
-                        "Reps", value=e["series_data"][s_idx].get("reps", ""),
-                        placeholder="Reps", key=f"rep_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
+                    row_cols = st.columns(grid_template)
+                    row_cols[0].markdown(
+                        f"<div class='routine-report-grid__serie'> {s_idx + 1}</div>",
+                        unsafe_allow_html=True,
                     )
-                    e["series_data"][s_idx]["peso"] = s_cols[1].text_input(
+                    e["series_data"][s_idx]["reps"] = row_cols[1].text_input(
+                        "Repeticiones", value=e["series_data"][s_idx].get("reps", ""),
+                        placeholder="Repeticiones", key=f"rep_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
+                    )
+                    e["series_data"][s_idx]["peso"] = row_cols[2].text_input(
                         "Peso", value=e["series_data"][s_idx].get("peso", ""),
                         placeholder="Kg", key=f"peso_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
                     )
-                    e["series_data"][s_idx]["rir"] = s_cols[2].text_input(
+                    e["series_data"][s_idx]["rir"] = row_cols[3].text_input(
                         "RIR", value=e["series_data"][s_idx].get("rir", ""),
                         placeholder="RIR", key=f"rir_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
                     )
 
                 # Comentario general
+                st.markdown("<div class='routine-caption'>Comentario general</div>", unsafe_allow_html=True)
                 e["comentario"] = st.text_input(
                     "Comentario general", value=e.get("comentario", ""),
-                    placeholder="Comentario", key=f"coment_{ejercicio_id}"
+                    placeholder="Comentario", key=f"coment_{ejercicio_id}", label_visibility="collapsed"
                 )
 
                 # Guardar SOLO este ejercicio
@@ -1478,6 +1769,11 @@ def ver_rutinas():
                             st.rerun()
                         else:
                             st.error("❌ No se pudo guardar el reporte.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
     # RPE + CTA
     st.markdown("<div class='hr-light'></div>", unsafe_allow_html=True)
@@ -1492,9 +1788,10 @@ def ver_rutinas():
 
     with st.container():
         st.markdown("<div class='sticky-cta'></div>", unsafe_allow_html=True)
-        cols = st.columns([3,2])
-        with cols[0]: st.caption("Cuando termines, registra tu sesión")
-        with cols[1]:
+        cta_cols = st.columns([1, 2, 1])
+        with cta_cols[1]:
+            st.markdown("<div class='routine-cta'>", unsafe_allow_html=True)
+            st.markdown("<div class='routine-caption'>Cuando termines, registra tu sesión</div>", unsafe_allow_html=True)
             if st.button("✅ Finalizar día", key=f"finalizar_{cliente_sel}_{semana_sel}_{dia_sel}",
                          type="primary", use_container_width=True):
                 with st.spinner("Guardando reportes (solo faltantes) y marcando el día como realizado..."):
@@ -1520,6 +1817,10 @@ def ver_rutinas():
                     except Exception as e:
                         st.error("❌ Error durante el guardado masivo del día.")
                         st.exception(e)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("</div><!-- routine-view -->", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # Run
 if __name__ == "__main__":

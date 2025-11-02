@@ -1,5 +1,6 @@
 # soft_login_full.py
 from __future__ import annotations
+import html
 import json
 import time
 from datetime import datetime, timezone, timedelta
@@ -43,7 +44,167 @@ _UI_RESTORED_FLAG = "_softlogin_ui_restored"    # evita rehidratar varias veces 
 
 # Qué versiones usamos para evolucionar el formato sin romper sesiones previas
 _UI_STATE_VERSION = 1
+_STYLE_FLAG = "_softlogin_styles_injected"
 
+
+def _inject_login_styles():
+    """Injecta estilos suavizados para el formulario de login (solo una vez por sesión)."""
+    if st.session_state.get(_STYLE_FLAG):
+        return
+
+    st.session_state[_STYLE_FLAG] = True
+
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stAppViewContainer"] {
+            background: linear-gradient(145deg, rgba(214, 64, 69, 0.12) 0%, var(--bg) 40%, rgba(214, 64, 69, 0.08) 100%);
+        }
+        div[data-testid="stAppViewContainer"] > .main {
+            background: transparent;
+        }
+        div[data-testid="stSidebar"] {
+            background: rgba(7, 5, 5, 0.94);
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) {
+            max-width: min(440px, 92vw);
+            margin: clamp(2.8rem, 12vh, 6rem) auto;
+            padding: clamp(2rem, 3vw, 2.6rem) clamp(1.8rem, 3.5vw, 2.4rem) clamp(2rem, 3vw, 2.4rem);
+            border-radius: 26px;
+            background: var(--surface);
+            border: 1px solid rgba(214, 64, 69, 0.28);
+            box-shadow:
+                0 32px 64px rgba(214, 64, 69, 0.22),
+                0 0 0 1px rgba(214, 64, 69, 0.12) inset;
+            color: var(--text-main);
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) > span.softlogin-card-marker {
+            display: none;
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) .softlogin-title {
+            font-size: clamp(2.05rem, 4vw, 2.45rem);
+            margin: 0 0 1.05rem;
+            background: linear-gradient(118deg, rgba(214, 64, 69, 1) 0%, rgba(239, 163, 80, 0.96) 55%, rgba(255, 243, 239, 0.95) 100%);
+            -webkit-background-clip: text;
+            color: transparent;
+            font-weight: 700;
+            line-height: 1.15;
+            text-transform: uppercase;
+            text-align: center;
+            text-shadow: 0 14px 28px rgba(214, 64, 69, 0.28);
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) .softlogin-subtitle {
+            font-size: 0.97rem;
+            color: rgba(120, 40, 36, 0.82);
+            line-height: 1.62;
+            margin-bottom: 1.9rem;
+            text-align: center;
+            background: linear-gradient(125deg, rgba(214, 64, 69, 0.16), rgba(239, 163, 80, 0.12));
+            padding: 0.68rem 1.2rem;
+            border-radius: 16px;
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) .softlogin-field-label {
+            font-size: 0.94rem;
+            font-weight: 600;
+            color: rgba(120, 40, 36, 0.88);
+            margin-bottom: 0.6rem;
+            letter-spacing: 0.02em;
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) div[data-baseweb="input"] {
+            border-radius: 0.9rem;
+            border: 1px solid rgba(214, 64, 69, 0.3);
+            background: rgba(255, 255, 255, 0.94);
+            transition: border-color 0.18s ease, box-shadow 0.18s ease;
+            box-shadow: none;
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) div[data-baseweb="input"]:focus-within {
+            border-color: rgba(214, 64, 69, 0.6);
+            box-shadow: 0 0 0 3px rgba(214, 64, 69, 0.26), 0 16px 38px rgba(214, 64, 69, 0.18);
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) input {
+            background: transparent !important;
+            color: var(--text-main) !important;
+            font-size: 1rem;
+            font-weight: 500;
+            letter-spacing: 0.01em;
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) input::placeholder {
+            color: rgba(120, 40, 36, 0.46);
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) .stCheckbox {
+            margin-top: 1.15rem;
+            margin-bottom: 1.4rem;
+            padding: 0.42rem 0.75rem;
+            border-radius: 14px;
+            background: rgba(214, 64, 69, 0.1);
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) .stCheckbox > label {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: rgba(120, 40, 36, 0.9);
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) .stCheckbox span[class*="checkbox"] {
+            width: 1.05rem;
+            height: 1.05rem;
+            border-radius: 0.32rem;
+            border-color: rgba(214, 64, 69, 0.45);
+            background: rgba(255, 255, 255, 0.92);
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) .stButton > button {
+            width: 100%;
+            border-radius: 0.95rem;
+            padding: 0.95rem 1.05rem;
+            font-weight: 600;
+            font-size: 1rem;
+            border: none;
+            color: #fff !important;
+            background: var(--primary) !important;
+            background-image: none !important;
+            box-shadow:
+                0 18px 42px rgba(214, 64, 69, 0.38) !important,
+                0 0 0 1px rgba(214, 64, 69, 0.18) inset !important;
+            transition: transform 0.18s ease, box-shadow 0.18s ease;
+            letter-spacing: 0.03em;
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) .stButton > button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 26px 55px rgba(214, 64, 69, 0.5) !important;
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) .stButton > button:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 4px rgba(214, 64, 69, 0.32) !important;
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) .softlogin-footer {
+            margin-top: 1.7rem;
+            font-size: 0.84rem;
+            line-height: 1.6;
+            color: rgba(120, 40, 36, 0.78);
+            text-align: center;
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) .softlogin-footer strong {
+            color: var(--primary);
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) [data-testid="stMarkdown"] p {
+            margin: 0;
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) [data-testid="stInfo"] {
+            background: rgba(214, 64, 69, 0.12);
+            border: 1px solid rgba(214, 64, 69, 0.26);
+        }
+        div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) [data-testid="stInfo"] p {
+            color: var(--text-main);
+        }
+        @media (max-width: 640px) {
+            div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) {
+                margin: clamp(1.6rem, 10vh, 3.2rem) auto;
+                border-radius: 22px;
+                padding: 2rem 1.6rem 1.9rem;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 def _role_bucket(role: str | None) -> str | None:
     """Agrupa roles equivalentes para persistir/restaurar estado contextual."""
@@ -523,19 +684,31 @@ def soft_login_barrier(required_roles=None, titulo="Bienvenido", ttl_seconds: in
         return True
 
     # UI del login
-    st.title(titulo)
-    st.caption("Ingresa tu correo para acceder. Si es tu primera vez, usaremos tu e-mail para validar tu rol.")
+    _inject_login_styles()
+    missing_dependencies = stx is None or TimestampSigner is None
 
-    if stx is None or TimestampSigner is None:
-        st.info(
-            "Nota: faltan dependencias para persistir la sesión. "
-            "Instala `extra-streamlit-components` e `itsdangerous`."
-        )
+    st.markdown('<div class="softlogin-background"><div class="softlogin-card">', unsafe_allow_html=True)
+    st.markdown('<span class="softlogin-pill">Momentum</span>', unsafe_allow_html=True)
+    st.markdown(
+        f'<h1 class="softlogin-title">{html.escape(titulo)}</h1>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <p class="softlogin-subtitle">
+            Ingresa tu correo para acceder a tus rutinas, reportes y seguimiento.
+            Verificamos tu rol automáticamente en cada inicio de sesión.
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
 
+    st.markdown('<div class="softlogin-field-label">Correo electrónico</div>', unsafe_allow_html=True)
     correo = st.text_input(
         "Correo electrónico",
         key="login_correo",
         placeholder="nombre@dominio.com",
+        label_visibility="collapsed",
     )
 
     remember = st.checkbox(
@@ -545,7 +718,25 @@ def soft_login_barrier(required_roles=None, titulo="Bienvenido", ttl_seconds: in
         help="Mantén tu sesión iniciada por una semana.",
     )
 
-    login_clicked = st.button("Continuar")
+    login_clicked = st.button("Continuar", use_container_width=True)
+
+    if missing_dependencies:
+        st.info(
+            "Nota: faltan dependencias para recordar tu sesión de forma persistente "
+            "(instala `extra-streamlit-components` e `itsdangerous`).",
+            icon="ℹ️",
+        )
+
+    st.markdown(
+        """
+        <p class="softlogin-footer">
+            <strong>¿Primera vez aquí?</strong> Si tu correo aún no está registrado,
+            pídele a tu entrenador que lo active en el sistema Momentum.
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
     if login_clicked:
         correo = (correo or "").strip().lower().replace(" ", "")
@@ -617,8 +808,13 @@ def soft_logout():
 # =========================
 def soft_login_test_ui():
     """
-    Prueba el módulo sin tocar la app principal:
-        streamlit run app_login_test.py
+    Prueba el módulo sin tocar la app principal creando un archivo mínimo que importe
+    esta función y la ejecute con Streamlit, por ejemplo:
+
+        import streamlit as st
+        from soft_login_full import soft_login_test_ui
+
+        soft_login_test_ui()
     """
     ok = soft_login_barrier(titulo="Bienvenido (test)", required_roles=None)
     if not ok:

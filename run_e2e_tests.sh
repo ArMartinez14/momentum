@@ -5,8 +5,8 @@
 echo "🚀 Configurando tests E2E para App Asesorías..."
 
 # Verificar que estamos en el directorio correcto
-if [ ! -f "appasesoria.py" ]; then
-    echo "❌ Error: No se encontró appasesoria.py. Ejecuta desde el directorio raíz del proyecto."
+if [ ! -f "app.py" ]; then
+    echo "❌ Error: No se encontró app.py. Ejecuta desde el directorio raíz del proyecto."
     exit 1
 fi
 
@@ -47,7 +47,7 @@ fi
 # Verificar si Streamlit está ejecutándose
 if ! curl -s http://localhost:8501 > /dev/null; then
     echo "⚠️  Streamlit no está ejecutándose en localhost:8501"
-    echo "   Inicia la app con: streamlit run appasesoria.py"
+    echo "   Inicia la app con: streamlit run app.py"
     echo "   Luego ejecuta este script nuevamente."
     exit 1
 fi
