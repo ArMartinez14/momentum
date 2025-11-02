@@ -146,6 +146,27 @@ button[data-testid="baseButton-secondary"] {{
   color:#FFF9F6 !important;
   font-weight:700 !important;
 }}
+
+/* Tabs: sin barra ni resalte grueso */
+.stTabs [data-baseweb="tab-list"] {{
+  border-bottom:none !important;
+  box-shadow:none !important;
+  background:transparent !important;
+}}
+.stTabs [data-baseweb="tab-highlight"] {{
+  display:none !important;
+}}
+
+/* Contenedor neutro para secciones de editor */
+.editor-block {{
+  background:transparent;
+  border:1px solid transparent;
+  border-radius:16px;
+  padding:16px 18px;
+  margin-bottom:16px;
+  box-shadow:none;
+}}
+
 .top-actions button[data-testid="baseButton-secondary"] {{
   color:var(--text-main) !important;
   font-weight:600 !important;

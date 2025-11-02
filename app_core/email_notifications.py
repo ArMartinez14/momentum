@@ -3,11 +3,13 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
+import html
 import smtplib
-from typing import Dict, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
@@ -296,6 +298,83 @@ def _strip_html(html: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def _lunes_de(fecha_ref: Optional[date] = None) -> date:
+    base = fecha_ref or date.today()
+    return base - timedelta(days=base.weekday())
+
+
+def _parse_fecha_lunes(value: Any) -> Optional[date]:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _formatear_fecha_es(fecha_obj: date) -> str:
+    return fecha_obj.strftime("%d/%m/%Y")
+
+
+def _iter_ejercicios_en_doc(doc: dict) -> Iterable[Tuple[str, dict]]:
+    rutina = doc.get("rutina")
+    if not isinstance(rutina, dict):
+        return []
+    for dia_key, dia_node in rutina.items():
+        dia_str = str(dia_key)
+        if not dia_str.isdigit():
+            continue
+        ejercicios: List[dict] = []
+        if isinstance(dia_node, list):
+            ejercicios = [e for e in dia_node if isinstance(e, dict)]
+        elif isinstance(dia_node, dict):
+            if isinstance(dia_node.get("ejercicios"), list):
+                ejercicios = [e for e in dia_node["ejercicios"] if isinstance(e, dict)]
+            else:
+                ejercicios = [v for v in dia_node.values() if isinstance(v, dict)]
+        for ejercicio in ejercicios:
+            yield (dia_str, ejercicio)
+
+
+def _extraer_comentarios_doc(doc: dict) -> List[Dict[str, str]]:
+    comentarios: List[Dict[str, str]] = []
+    for dia_str, ejercicio in _iter_ejercicios_en_doc(doc):
+        comentario_raw = ejercicio.get("comentario")
+        if comentario_raw is None:
+            continue
+        comentario = str(comentario_raw).strip()
+        if not comentario:
+            continue
+        nombre_ej = (
+            ejercicio.get("ejercicio")
+            or ejercicio.get("Ejercicio")
+            or ejercicio.get("nombre")
+            or ejercicio.get("id_ejercicio")
+            or "Ejercicio sin nombre"
+        )
+        comentarios.append(
+            {
+                "dia": dia_str,
+                "ejercicio": str(nombre_ej),
+                "comentario": comentario,
+            }
+        )
+    return comentarios
+
+
+def _bloque_resumen_label(info: Dict[str, Any]) -> str:
+    objetivo = str(info.get("objetivo") or "").strip()
+    bloque_id = str(info.get("bloque_id") or "").strip()
+    bloque_short = bloque_id[:8] if bloque_id else ""
+    if objetivo and bloque_short:
+        return f"{objetivo} (ID {bloque_short})"
+    if objetivo:
+        return objetivo
+    if bloque_short:
+        return f"Bloque {bloque_short}"
+    return "Bloque sin nombre"
+
+
 def _resolve_portal_url(empresa: str | None = None) -> Optional[str]:
     empresa_norm = (empresa or "").strip().lower()
     settings = _load_settings()
@@ -465,6 +544,339 @@ def enviar_correo_bienvenida(
         text_body=text_body,
         to_name=nombre or None,
     )
+
+
+def preparar_resumen_bloques_entrenador(
+    correo_entrenador: str,
+    fecha_referencia: Optional[date] = None,
+) -> Dict[str, Any]:
+    correo_norm = (correo_entrenador or "").strip().lower()
+    if not correo_norm:
+        raise ValueError("correo_entrenador es obligatorio.")
+
+    fecha_base = fecha_referencia or date.today()
+    lunes_actual = _lunes_de(fecha_base)
+    domingo_actual = lunes_actual + timedelta(days=6)
+    lunes_siguiente = lunes_actual + timedelta(days=7)
+
+    db = get_db()
+
+    rol_destino = ""
+    try:
+        snaps_usuario = db.collection("usuarios").where("correo", "==", correo_norm).limit(1).stream()
+        for snap in snaps_usuario:
+            data_usuario = snap.to_dict() or {}
+            rol_destino = str(data_usuario.get("rol") or "").strip().lower()
+            break
+    except Exception:
+        rol_destino = ""
+
+    if rol_destino and rol_destino not in {"entrenador", "admin", "administrador"}:
+        raise ValueError("Solo se generan resúmenes para entrenadores o administradores.")
+
+    col = db.collection("rutinas_semanales")
+    try:
+        snaps = list(col.where("entrenador", "==", correo_norm).stream())
+    except Exception as exc:
+        _emit_warning(f"No se pudo filtrar rutinas por entrenador '{correo_norm}': {exc}")
+        try:
+            snaps = list(col.stream())
+        except Exception:
+            snaps = []
+
+    docs: List[Dict[str, Any]] = []
+    for snap in snaps:
+        try:
+            if not snap.exists:
+                continue
+        except Exception:
+            pass
+        data = snap.to_dict() or {}
+        entrenador_val = str(data.get("entrenador") or "").strip().lower()
+        if entrenador_val != correo_norm:
+            continue
+        data["_doc_id"] = snap.id
+        docs.append(data)
+
+    if not docs:
+        raise ValueError("El entrenador no tiene rutinas registradas.")
+
+    bloques: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    comentarios_semana: List[Dict[str, Any]] = []
+
+    for data in docs:
+        fecha_lunes_dt = _parse_fecha_lunes(data.get("fecha_lunes"))
+        if not fecha_lunes_dt:
+            continue
+
+        correo_cliente = str(data.get("correo") or "").strip().lower()
+        if not correo_cliente:
+            continue
+
+        bloque_id_raw = str(data.get("bloque_rutina") or "").strip()
+        if not bloque_id_raw:
+            continue
+
+        cliente_nombre = str(data.get("cliente") or data.get("nombre") or "").strip()
+        if not cliente_nombre:
+            if "@" in correo_cliente:
+                cliente_nombre = correo_cliente.split("@", 1)[0]
+            else:
+                cliente_nombre = correo_cliente
+        objetivo_txt = str(data.get("objetivo") or "").strip()
+
+        key = (correo_cliente, bloque_id_raw)
+        info = bloques.get(key)
+        if info is None:
+            info = {
+                "cliente": cliente_nombre,
+                "bloque_id": bloque_id_raw,
+                "objetivo": objetivo_txt,
+                "fechas": set(),
+            }
+            bloques[key] = info
+        else:
+            if not info.get("cliente"):
+                info["cliente"] = cliente_nombre
+            if not info.get("objetivo") and objetivo_txt:
+                info["objetivo"] = objetivo_txt
+
+        info["fechas"].add(fecha_lunes_dt)
+
+        if fecha_lunes_dt == lunes_actual:
+            comentarios_doc = _extraer_comentarios_doc(data)
+            for comentario in comentarios_doc:
+                dia_val = comentario.get("dia", "")
+                try:
+                    dia_int = int(dia_val)
+                except Exception:
+                    dia_int = None
+                comentarios_semana.append(
+                    {
+                        "cliente": info["cliente"],
+                        "dia": dia_val,
+                        "dia_int": dia_int,
+                        "ejercicio": comentario.get("ejercicio", ""),
+                        "comentario": comentario.get("comentario", ""),
+                    }
+                )
+
+    bloques_terminados: List[Dict[str, Any]] = []
+    bloques_proximos: List[Dict[str, Any]] = []
+
+    for info in bloques.values():
+        fechas: List[date] = sorted(info["fechas"])
+        if not fechas:
+            continue
+        fecha_inicio = fechas[0]
+        ultima_fecha = fechas[-1]
+        total_semanas = len(fechas)
+
+        diff_sem = ((lunes_actual - fecha_inicio).days // 7) + 1
+        semana_actual_idx = max(1, min(diff_sem, total_semanas))
+
+        entry_base = {
+            "cliente": info["cliente"],
+            "bloque_id": info["bloque_id"],
+            "objetivo": info.get("objetivo") or "",
+            "ultima_semana": ultima_fecha,
+            "total_semanas": total_semanas,
+            "semana_actual": semana_actual_idx,
+            "fecha_inicio": fecha_inicio,
+        }
+
+        if ultima_fecha == lunes_actual:
+            bloques_terminados.append(entry_base)
+        elif ultima_fecha == lunes_siguiente:
+            bloques_proximos.append(entry_base)
+
+    bloques_terminados.sort(key=lambda x: x["cliente"].lower())
+    bloques_proximos.sort(key=lambda x: x["cliente"].lower())
+    comentarios_semana.sort(
+        key=lambda x: (x["cliente"].lower(), x.get("dia_int") or 99, x.get("ejercicio", "").lower())
+    )
+
+    comentarios_agrupados_map: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for comentario in comentarios_semana:
+        cliente = comentario.get("cliente", "")
+        dia_lbl = comentario.get("dia") or ""
+        ejercicio_txt = comentario.get("ejercicio") or ""
+        key = (cliente, dia_lbl, ejercicio_txt)
+        if key not in comentarios_agrupados_map:
+            comentarios_agrupados_map[key] = {
+                "cliente": cliente,
+                "dia": dia_lbl,
+                "dia_int": comentario.get("dia_int"),
+                "ejercicio": ejercicio_txt,
+                "comentarios": [],
+            }
+        texto = (comentario.get("comentario") or "").strip()
+        if texto:
+            comentarios_agrupados_map[key]["comentarios"].append(texto)
+
+    comentarios_agrupados = [
+        value for value in comentarios_agrupados_map.values() if value.get("comentarios")
+    ]
+
+    if not bloques_terminados and not bloques_proximos and not comentarios_agrupados:
+        raise ValueError("No hay rutinas por terminar ni comentarios nuevos para esta semana.")
+
+    nombre_destino = _buscar_nombre_usuario(correo_norm) or ""
+    if not nombre_destino:
+        local = correo_norm.split("@", 1)[0] if "@" in correo_norm else correo_norm
+        nombre_destino = local.replace(".", " ").replace("_", " ").title()
+
+    rango_semana = f"{_formatear_fecha_es(lunes_actual)} al {_formatear_fecha_es(domingo_actual)}"
+    subject = f"Resumen semanal de bloques | Semana del {_formatear_fecha_es(lunes_actual)}"
+
+    html_parts = [
+        "<html><body style='font-family:Helvetica,Arial,sans-serif;font-size:15px;color:#1f2933;line-height:1.6;'>",
+        f"<p>Hola {html.escape(nombre_destino)},</p>",
+        f"<p>Este es el resumen semanal de tus bloques correspondiente a la semana del {html.escape(rango_semana)}.</p>",
+    ]
+
+    text_lines = [
+        f"Hola {nombre_destino},",
+        "",
+        f"Resumen semanal de tus bloques ({rango_semana}).",
+    ]
+
+    def _render_bloques_section(
+        titulo: str,
+        items: List[Dict[str, Any]],
+        empty_msg: str,
+    ) -> None:
+        html_parts.append(f"<h2 style='margin-top:24px;font-size:18px;color:#0f172a;'>{html.escape(titulo)}</h2>")
+        text_lines.append("")
+        text_lines.append(f"{titulo}:")
+        if items:
+            html_parts.append("<ul style='padding-left:18px;margin:8px 0 0;'>")
+            for item in items:
+                ultima_txt = _formatear_fecha_es(item["ultima_semana"])
+                total = item["total_semanas"]
+                semana_idx = item.get("semana_actual") or total
+                html_parts.append(
+                    "<li style='margin-bottom:6px;'>"
+                    f"<strong>{html.escape(item['cliente'])}</strong> — "
+                    f"Semana {semana_idx} de {total} · última semana programada {html.escape(ultima_txt)}"
+                    "</li>"
+                )
+                text_lines.append(
+                    f"- {item['cliente']} — Semana {semana_idx} de {total} · última semana programada {ultima_txt}"
+                )
+        else:
+            html_parts.append(f"<p style='margin:6px 0;'>{html.escape(empty_msg)}</p>")
+            text_lines.append(f"- {empty_msg}")
+
+    _render_bloques_section(
+        "Bloques Terminados",
+        bloques_terminados,
+        "No hay bloques que finalicen esta semana.",
+    )
+    _render_bloques_section(
+        "Bloques próximos a terminar",
+        bloques_proximos,
+        "No hay bloques cuya última semana sea la próxima semana.",
+    )
+
+    html_parts.append("<h2 style='margin-top:24px;font-size:18px;color:#0f172a;'>Comentarios</h2>")
+    text_lines.append("")
+    text_lines.append("Comentarios de la semana:")
+
+    if comentarios_agrupados:
+        html_parts.append("<ul style='padding-left:18px;margin:8px 0 0;'>")
+        for comentario in comentarios_agrupados:
+            dia_lbl = comentario.get("dia")
+            dia_txt = f"Día {dia_lbl}" if dia_lbl else "Día"
+            ejercicio_txt = comentario.get("ejercicio") or "Ejercicio"
+            comentarios_html = "".join(
+                "<li style='margin-bottom:4px;'>"
+                f"{html.escape(texto).replace('\r\n', '<br>').replace('\n', '<br>')}"
+                "</li>"
+                for texto in comentario.get("comentarios", [])
+            )
+            html_parts.append(
+                "<li style='margin-bottom:8px;'>"
+                f"<strong>{html.escape(comentario['cliente'])}</strong> — {html.escape(dia_txt)} · {html.escape(ejercicio_txt)}"
+                f"<ul style='margin-top:4px;padding-left:18px;color:#475569;'>{comentarios_html}</ul>"
+                "</li>"
+            )
+            text_lines.append(f"- {comentario['cliente']} — {dia_txt} — {ejercicio_txt}:")
+            for texto in comentario.get("comentarios", []):
+                text_lines.append(f"    • {texto}")
+            text_lines.append("")
+        html_parts.append("</ul>")
+    else:
+        html_parts.append("<p style='margin:6px 0;'>No se registraron comentarios en los reportes de esta semana.</p>")
+        text_lines.append("- No se registraron comentarios en los reportes de esta semana.")
+
+    html_parts.append("<p style='margin-top:24px;'>Este resumen está pensado para enviarse los domingos, justo antes de iniciar la siguiente semana de trabajo.</p>")
+    html_parts.append("<p style='margin-top:12px;'>Buen trabajo y cualquier duda responde a este correo.</p>")
+    html_parts.append("<p style='margin-top:16px;color:#475569;'>Equipo Momentum</p>")
+    html_parts.append("</body></html>")
+
+    text_lines.append("")
+    text_lines.append("Este resumen está pensado para enviarse los domingos.")
+    text_lines.append("")
+    text_lines.append("Equipo Momentum")
+
+    html_body = "\n".join(html_parts)
+    text_body = "\n".join(text_lines)
+
+    metadata = {
+        "lunes_actual": lunes_actual,
+        "domingo_actual": domingo_actual,
+        "lunes_siguiente": lunes_siguiente,
+        "destinatario": correo_norm,
+        "bloques_terminados": bloques_terminados,
+        "bloques_proximos": bloques_proximos,
+        "comentarios": comentarios_agrupados,
+    }
+
+    return {
+        "subject": subject,
+        "html_body": html_body,
+        "text_body": text_body,
+        "destinatario": correo_norm,
+        "nombre_destinatario": nombre_destino,
+        "metadata": metadata,
+    }
+
+
+def enviar_resumen_bloques_entrenador(
+    correo_entrenador: str,
+    enviar: bool = False,
+    fecha_referencia: Optional[date] = None,
+) -> Dict[str, Any]:
+    try:
+        contenido = preparar_resumen_bloques_entrenador(correo_entrenador, fecha_referencia)
+    except ValueError as exc:
+        return {
+            "enviado": False,
+            "error": str(exc),
+            "destinatario": (correo_entrenador or "").strip().lower(),
+        }
+
+    resultado = dict(contenido)
+
+    if not enviar:
+        resultado["enviado"] = False
+        return resultado
+
+    enviado = _send_email(
+        to_email=contenido["destinatario"],
+        subject=contenido["subject"],
+        html_body=contenido["html_body"],
+        text_body=contenido["text_body"],
+        to_name=contenido.get("nombre_destinatario"),
+    )
+
+    if "metadata" in resultado:
+        resultado["metadata"] = dict(resultado["metadata"])
+        resultado["metadata"]["enviado"] = enviado
+
+    resultado["enviado"] = enviado
+    return resultado
 
 
 def enviar_correo_rutina_disponible(
