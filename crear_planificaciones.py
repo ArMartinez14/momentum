@@ -134,16 +134,51 @@ def tiene_video(nombre_ejercicio: str, ejercicios_dict: dict[str, dict]) -> bool
     return bool(link)
 
 
+_CUSTOM_CIRCUITOS_KEY = "_custom_circuitos_por_seccion"
+
+
+def _registrar_circuito_personalizado(seccion: str, circuito: str) -> None:
+    """Guarda circuitos adicionales para que aparezcan como opción válida."""
+    seccion_norm = (seccion or "").strip().lower()
+    circuito_norm = (circuito or "").strip()
+    if not seccion_norm or not circuito_norm:
+        return
+    store = st.session_state.setdefault(_CUSTOM_CIRCUITOS_KEY, {})
+    existentes = store.setdefault(seccion_norm, [])
+    if not any(circuito_norm.lower() == val.lower() for val in existentes):
+        existentes.append(circuito_norm)
+
+
 def get_circuit_options(seccion: str) -> list[str]:
-    """Devuelve circuitos válidos según sección."""
-    if (seccion or "").lower().strip() == "warm up":
-        return ["A", "B", "C"]
-    # Work Out: D en adelante
-    return list("DEFGHIJKL")
+    """Devuelve circuitos válidos según sección, incluyendo los personalizados cargados."""
+    seccion_norm = (seccion or "").strip().lower()
+    base = ["A", "B", "C"] if seccion_norm == "warm up" else list("DEFGHIJKL")
+    personalizados = st.session_state.get(_CUSTOM_CIRCUITOS_KEY, {}).get(seccion_norm, [])
+    opciones = []
+    for circ in base + list(personalizados or []):
+        if not circ:
+            continue
+        if any(circ.lower() == existente.lower() for existente in opciones):
+            continue
+        opciones.append(circ)
+    return opciones or base
+
 
 def clamp_circuito_por_seccion(circ: str, seccion: str) -> str:
     opciones = get_circuit_options(seccion)
-    return circ if circ in opciones else opciones[0]
+    circ_norm = (circ or "").strip()
+    if not opciones:
+        return circ_norm
+    if not circ_norm:
+        return opciones[0]
+    for opt in opciones:
+        if circ_norm == opt:
+            return opt
+    circ_upper = circ_norm.upper()
+    for opt in opciones:
+        if circ_upper == opt.upper():
+            return opt
+    return opciones[0]
 
 # === Helpers para detectar implemento por Marca + Máquina (mismo criterio que admin) ===
 import re as _re_mod
@@ -551,12 +586,6 @@ def _ejercicio_firestore_a_fila_ui_min(ej: dict) -> dict:
         fila["_exact_on_load"] = True  # ← forzar match exacto sólo al cargar
 
 
-    # Asegurar circuito válido según sección (usas clamp_circuito_por_seccion)
-    try:
-        fila["Circuito"] = clamp_circuito_por_seccion(fila.get("Circuito","") or "", fila["Sección"])
-    except Exception:
-        pass
-
     return fila
 
 def _vaciar_dias_en_session():
@@ -568,6 +597,7 @@ def _vaciar_dias_en_session():
     for k in list(st.session_state.keys()):
         if any(p in k for p in ["_Warm_Up_", "_Work_Out_", "_Cardio_", "multiselect_", "do_copy_"]):
             st.session_state.pop(k, None)
+    st.session_state.pop(_CUSTOM_CIRCUITOS_KEY, None)
 
 def cargar_doc_en_session_base(rutina_dict: dict):
     """
@@ -587,6 +617,8 @@ def cargar_doc_en_session_base(rutina_dict: dict):
         wu, wo = [], []
         for ej in ejercicios_dia:
             fila = _ejercicio_firestore_a_fila_ui_min(ej)
+            _registrar_circuito_personalizado(fila.get("Sección"), fila.get("Circuito"))
+            fila["Circuito"] = clamp_circuito_por_seccion(fila.get("Circuito", ""), fila.get("Sección"))
             if fila.get("Sección") == "Warm Up":
                 wu.append(fila)
             else:
@@ -798,7 +830,13 @@ def _cargar_borrador_en_session(borrador: dict):
             key = f"rutina_dia_{dia_idx}_{seccion.replace(' ', '_')}"
             filas = secciones.get(seccion)
             if isinstance(filas, list):
-                st.session_state[key] = filas
+                normalizadas = []
+                for fila in filas:
+                    fila_data = dict(fila) if isinstance(fila, dict) else {}
+                    _registrar_circuito_personalizado(seccion, fila_data.get("Circuito"))
+                    fila_data["Circuito"] = clamp_circuito_por_seccion(fila_data.get("Circuito", ""), seccion)
+                    normalizadas.append(fila_data)
+                st.session_state[key] = normalizadas
         if isinstance(secciones, dict) and "Cardio" in secciones:
             _set_cardio_en_session(dia_idx, secciones.get("Cardio"))
 
@@ -1081,6 +1119,16 @@ def crear_rutinas():
     st.markdown("<h3 class='h-accent'>Días de entrenamiento</h3>", unsafe_allow_html=True)
 
     dias_labels = ["Día 1", "Día 2", "Día 3", "Día 4", "Día 5"]
+    st.markdown(
+        """
+        <style>
+            div[data-testid="stTabs"] div[role="tablist"] > button[aria-selected="true"] {
+                border-bottom: 3px solid #d60000;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     tabs = st.tabs(dias_labels)
     dias = dias_labels  # alias
 
@@ -1925,6 +1973,13 @@ def crear_rutinas():
 
     # Carga catálogo de ejercicios
     ejercicios_dict = cargar_ejercicios()
+    ejercicios_por_norm: dict[str, tuple[str | None, dict]] = {}
+    for nombre_catalogo, data in ejercicios_dict.items():
+        norm = normalizar_texto(nombre_catalogo)
+        if norm and norm not in ejercicios_por_norm:
+            ejercicios_por_norm[norm] = (nombre_catalogo, data)
+
+    es_categoria_grupo = opcion_categoria in ("grupo_muscular (prim+sec)", "grupo_muscular_principal")
 
     # Claves de secciones a considerar
     secciones_consideradas = []
@@ -1937,6 +1992,7 @@ def crear_rutinas():
     # Acumuladores
     contador_valor = {}     # categoria_norm -> series acumuladas (float)
     nombres_originales = {} # categoria_norm -> {nombres originales}
+    ejercicios_sin_grupo: dict[str, dict] = {}
 
     # Recorrido
     for key_seccion, peso_seccion in secciones_consideradas:
@@ -1952,11 +2008,11 @@ def crear_rutinas():
                 continue
 
             # busca metadatos del ejercicio
-            coincidencias = [
-                data for nombre, data in ejercicios_dict.items()
-                if normalizar_texto(nombre) == normalizar_texto(nombre_raw)
-            ]
-            meta = coincidencias[0] if coincidencias else {}
+            norm_nombre = normalizar_texto(nombre_raw)
+            nombre_catalogo, meta = ejercicios_por_norm.get(norm_nombre, (None, {}))
+            doc_id_meta = str(meta.get("_doc_id") or "")
+            grupo_principal_actual = (meta.get("grupo_muscular_principal") or meta.get("grupo_muscular") or "").strip()
+            grupo_secundario_actual = meta.get("grupo_muscular_secundario")
 
             # distribución por categoría
             if opcion_categoria == "patron_de_movimiento":
@@ -1966,11 +2022,33 @@ def crear_rutinas():
             elif opcion_categoria == "grupo_muscular_principal":
                 categoria = meta.get("grupo_muscular_principal") or meta.get("grupo_muscular") or "(sin dato)"
                 _add_valor(contador_valor, nombres_originales, categoria, series_val * peso_seccion)
+                if es_categoria_grupo and categoria == "(sin dato)":
+                    key_store = f"doc::{doc_id_meta}" if doc_id_meta else f"nombre::{norm_nombre}"
+                    if key_store not in ejercicios_sin_grupo:
+                        ejercicios_sin_grupo[key_store] = {
+                            "doc_id": doc_id_meta,
+                            "nombre_catalogo": nombre_catalogo or nombre_raw,
+                            "nombre_display": nombre_raw,
+                            "grupo_principal_actual": grupo_principal_actual,
+                            "grupo_secundario_actual": grupo_secundario_actual,
+                            "actualizable": bool(doc_id_meta),
+                        }
 
             else:  # "grupo_muscular (prim+sec)"
                 # Principal: suma completo
                 cat_p = meta.get("grupo_muscular_principal") or meta.get("grupo_muscular") or "(sin dato)"
                 _add_valor(contador_valor, nombres_originales, cat_p, series_val * peso_seccion)
+                if es_categoria_grupo and cat_p == "(sin dato)":
+                    key_store = f"doc::{doc_id_meta}" if doc_id_meta else f"nombre::{norm_nombre}"
+                    if key_store not in ejercicios_sin_grupo:
+                        ejercicios_sin_grupo[key_store] = {
+                            "doc_id": doc_id_meta,
+                            "nombre_catalogo": nombre_catalogo or nombre_raw,
+                            "nombre_display": nombre_raw,
+                            "grupo_principal_actual": grupo_principal_actual,
+                            "grupo_secundario_actual": grupo_secundario_actual,
+                            "actualizable": bool(doc_id_meta),
+                        }
 
                 # Secundarios: reparte ponderación
                 secundarios_raw = meta.get("grupo_muscular_secundario") or ""
@@ -2003,6 +2081,129 @@ def crear_rutinas():
             st.dataframe(df, use_container_width=True, hide_index=True)
         else:
             st.info("No hay datos de series aún.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    if es_categoria_grupo and ejercicios_sin_grupo:
+        st.markdown("<div class='sidebar-card' style='margin-top:12px'>", unsafe_allow_html=True)
+        st.markdown("#### Completar grupos musculares pendientes")
+        st.caption("Actualiza los ejercicios que aparecen como “sin dato” para mantener el análisis al día.")
+
+        try:
+            catalogos = get_catalogos() or {}
+        except Exception as exc:
+            catalogos = {}
+            st.warning(f"No pude cargar el catálogo de grupos musculares: {exc}")
+
+        opciones_gp = [""] + sorted(set(catalogos.get("grupo_muscular_principal", []) or []))
+        opciones_gs = [""] + sorted(set(catalogos.get("grupo_muscular_secundario", []) or []))
+
+        def _secundario_a_str(raw) -> str:
+            if isinstance(raw, str):
+                return raw
+            if isinstance(raw, list):
+                return ", ".join([str(v).strip() for v in raw if str(v).strip()])
+            if isinstance(raw, dict):
+                return ", ".join([str(v).strip() for _, v in sorted(raw.items()) if str(v).strip()])
+            return ""
+
+        ejercicios_pendientes = sorted(
+            ejercicios_sin_grupo.values(),
+            key=lambda item: normalizar_texto(item.get("nombre_catalogo") or item.get("nombre_display") or ""),
+        )
+        ejercicios_actualizables = [item for item in ejercicios_pendientes if item.get("actualizable")]
+        ejercicios_sin_catalogo = [item for item in ejercicios_pendientes if not item.get("actualizable")]
+
+        form_entries: list[tuple[dict, str, str]] = []
+        if ejercicios_actualizables:
+            with st.form("form_actualizar_grupos_sin_dato"):
+                for idx, item in enumerate(ejercicios_actualizables):
+                    cols_sel = st.columns([2.3, 1.9, 1.9], gap="small")
+                    nombre_visible = item.get("nombre_catalogo") or item.get("nombre_display") or "Ejercicio"
+                    cols_sel[0].markdown(f"**{nombre_visible}**")
+
+                    opciones_local_p = list(opciones_gp)
+                    grupo_actual = (item.get("grupo_principal_actual") or "").strip()
+                    if grupo_actual and grupo_actual not in opciones_local_p:
+                        opciones_local_p.append(grupo_actual)
+                    try:
+                        idx_gp = opciones_local_p.index(grupo_actual)
+                    except ValueError:
+                        idx_gp = 0
+                    primary_sel = cols_sel[1].selectbox(
+                        "Grupo principal",
+                        opciones_local_p,
+                        index=idx_gp,
+                        key=f"missing_gp_{item['doc_id']}",
+                    )
+
+                    opciones_local_s = list(opciones_gs)
+                    secundario_actual = _secundario_a_str(item.get("grupo_secundario_actual"))
+                    if secundario_actual and secundario_actual not in opciones_local_s:
+                        opciones_local_s.append(secundario_actual)
+                    try:
+                        idx_gs = opciones_local_s.index(secundario_actual)
+                    except ValueError:
+                        idx_gs = 0
+                    secondary_sel = cols_sel[2].selectbox(
+                        "Grupo secundario",
+                        opciones_local_s,
+                        index=idx_gs,
+                        key=f"missing_gs_{item['doc_id']}",
+                    )
+
+                    form_entries.append((item, primary_sel, secondary_sel))
+
+                submitted = st.form_submit_button("Guardar grupos musculares")
+        else:
+            submitted = False
+
+        if submitted:
+            db = get_db()
+            actualizados = 0
+            faltantes: list[str] = []
+            errores: list[str] = []
+
+            for item, primary_sel, secondary_sel in form_entries:
+                primary_clean = (primary_sel or "").strip()
+                secondary_clean = (secondary_sel or "").strip()
+                if not primary_clean:
+                    faltantes.append(item.get("nombre_catalogo") or item.get("nombre_display") or "Ejercicio")
+                    continue
+
+                payload_update = {
+                    "grupo_muscular_principal": primary_clean,
+                    "grupo_muscular": primary_clean,
+                    "grupo_muscular_secundario": secondary_clean,
+                    "updated_at": firestore.SERVER_TIMESTAMP,
+                }
+
+                try:
+                    db.collection("ejercicios").document(item["doc_id"]).set(payload_update, merge=True)
+                    dict_key = item.get("nombre_catalogo")
+                    if dict_key and dict_key in ejercicios_dict:
+                        ejercicios_dict[dict_key]["grupo_muscular_principal"] = primary_clean
+                        ejercicios_dict[dict_key]["grupo_muscular"] = primary_clean
+                        ejercicios_dict[dict_key]["grupo_muscular_secundario"] = secondary_clean
+                    actualizados += 1
+                except Exception as exc:
+                    errores.append(f"{item.get('nombre_catalogo') or item.get('nombre_display')}: {exc}")
+
+            if faltantes:
+                st.warning("Completa el grupo principal para: " + ", ".join(faltantes))
+            for mensaje in errores:
+                st.error(f"❌ {mensaje}")
+            if actualizados and not errores:
+                st.success(f"✅ Se actualizaron {actualizados} ejercicio(s).")
+                st.cache_data.clear()
+                _trigger_rerun()
+
+        if ejercicios_sin_catalogo:
+            nombres_alerta = ", ".join(sorted({item.get("nombre_display") or item.get("nombre_catalogo") or "Ejercicio" for item in ejercicios_sin_catalogo}))
+            st.info(
+                "Los siguientes ejercicios aparecen sin grupo en la rutina pero no están registrados en tu catálogo: "
+                f"{nombres_alerta}. Usa el botón “＋ Crear ejercicio” o edítalos manualmente para agregarlos."
+            )
+
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ======= Previsualización =======
@@ -2200,6 +2401,7 @@ def crear_rutinas():
                 fecha_inicio,
                 int(semanas),
                 dias_labels,
+                enviar_correo_check,
                 objetivo=objetivo_val,
                 ejercicios_meta=ejercicios_dict,
             )

@@ -271,7 +271,14 @@ def _fila_vacia(seccion: str) -> dict:
 def _ejercicio_firestore_a_fila_ui(ej: dict) -> dict:
     fila = _fila_vacia(ej.get("Sección") or ej.get("bloque") or "")
     seccion = fila["Sección"]
-    fila["Circuito"] = clamp_circuito_por_seccion(ej.get("Circuito") or ej.get("circuito") or "", seccion)
+    circuito_original = (ej.get("Circuito") or ej.get("circuito") or "").strip()
+    fila["Circuito"] = circuito_original or clamp_circuito_por_seccion("", seccion)
+    if not seccion:
+        if circuito_original in {"A", "B", "C"}:
+            fila["Sección"] = "Warm Up"
+        elif circuito_original:
+            fila["Sección"] = "Work Out"
+        seccion = fila["Sección"]
     fila["Ejercicio"] = ej.get("Ejercicio") or ej.get("ejercicio") or ""
     if seccion == "Work Out":
         fila["BuscarEjercicio"] = fila["Ejercicio"]
@@ -797,10 +804,15 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
             cols = st.columns(sizes)
 
             fila.setdefault("Sección", seccion)
+            opciones_circuito = get_circuit_options(seccion)
+            valor_circuito = (fila.get("Circuito") or "").strip()
+            if valor_circuito and valor_circuito not in opciones_circuito:
+                opciones_circuito = [valor_circuito] + [opt for opt in opciones_circuito if opt != valor_circuito]
+            indice_circuito = opciones_circuito.index(valor_circuito) if valor_circuito in opciones_circuito else 0
             fila["Circuito"] = cols[pos["Circuito"]].selectbox(
                 "",
-                get_circuit_options(seccion),
-                index=(get_circuit_options(seccion).index(fila.get("Circuito")) if fila.get("Circuito") in get_circuit_options(seccion) else 0),
+                opciones_circuito,
+                index=indice_circuito,
                 key=f"circ_{key_entrenamiento}",
                 label_visibility="collapsed",
             )
@@ -1109,6 +1121,17 @@ def editar_rutinas():
         ["Progresión 1", "Progresión 2", "Progresión 3"],
         horizontal=True,
         key="editar_rutinas_progresion",
+    )
+
+    st.markdown(
+        """
+        <style>
+            div[data-testid="stTabs"] div[role="tablist"] > button[aria-selected="true"] {
+                border-bottom: 3px solid #d60000;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
     tabs = st.tabs(dias_labels)

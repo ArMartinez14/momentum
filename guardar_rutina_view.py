@@ -353,6 +353,7 @@ def guardar_rutina(
     fecha_inicio,
     semanas,
     dias,
+    notificar_correo: bool = False,
     objetivo: str | None = None,
     ejercicios_meta: dict[str, dict] | None = None,
 ):
@@ -605,18 +606,21 @@ def guardar_rutina(
                 db.collection("rutinas_semanales").document(doc_id).set(rutina_semana)
 
         st.success(f"✅ Rutina generada correctamente para {semanas} semanas (progresión acumulativa + descanso + RIR min/max + series).")
-        empresa_cliente = empresa_de_usuario(correo)
-        envio_ok = enviar_correo_rutina_disponible(
-            correo=correo,
-            nombre=nombre_sel,
-            fecha_inicio=fecha_inicio,
-            semanas=semanas,
-            empresa=empresa_cliente,
-            coach=entrenador,
-        )
-        if envio_ok:
-            st.caption("El cliente fue notificado por correo con su bloque actualizado.")
+        if notificar_correo:
+            empresa_cliente = empresa_de_usuario(correo)
+            envio_ok = enviar_correo_rutina_disponible(
+                correo=correo,
+                nombre=nombre_sel,
+                fecha_inicio=fecha_inicio,
+                semanas=semanas,
+                empresa=empresa_cliente,
+                coach=entrenador,
+            )
+            if envio_ok:
+                st.caption("El cliente fue notificado por correo con su bloque actualizado.")
+            else:
+                st.caption("No se pudo enviar el aviso por correo; revisa la configuración de notificaciones.")
         else:
-            st.caption("No se pudo enviar el aviso por correo; revisa la configuración de notificaciones.")
+            st.caption("No se envió correo porque la notificación está desactivada.")
     except Exception as e:
         st.error(f"❌ Error al guardar la rutina: {e}")

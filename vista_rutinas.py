@@ -366,6 +366,56 @@ st.markdown(
         display: flex;
         justify-content: center;
     }
+    .cardio-card {
+        margin: 20px auto 8px;
+        padding: 18px 20px;
+        border-radius: 14px;
+        border: 1px solid rgba(214, 0, 0, 0.35);
+        background: rgba(214, 0, 0, 0.08);
+        width: min(640px, 100%);
+    }
+    .cardio-card__title {
+        font-weight: 700;
+        text-align: center;
+        font-size: 1.02rem;
+        color: #d60000;
+        margin-bottom: 6px;
+    }
+    .cardio-card__subtitle {
+        text-align: center;
+        font-size: 0.94rem;
+        color: var(--text-main);
+        margin-bottom: 10px;
+    }
+    .cardio-card__grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 8px 16px;
+        text-align: left;
+    }
+    .cardio-card__item {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+    .cardio-card__label {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: rgba(214, 0, 0, 0.75);
+    }
+    .cardio-card__value {
+        font-size: 0.96rem;
+        font-weight: 600;
+        color: var(--text-main);
+    }
+    .cardio-card__note {
+        margin-top: 14px;
+        font-size: 0.9rem;
+        line-height: 1.4;
+        color: var(--text-main);
+        text-align: center;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -394,8 +444,8 @@ def _rirstr(e: dict) -> str:
     rmin = _pick(e.get("RirMin"), e.get("rir_min"), e.get("RIR_min"))
     rmax = _pick(e.get("RirMax"), e.get("rir_max"), e.get("RIR_max"))
 
-    rmin_s = str(rmin).strip() if rmin is not None else ""
-    rmax_s = str(rmax).strip() if rmax is not None else ""
+    rmin_s, _ = _format_display_value(rmin)
+    rmax_s, _ = _format_display_value(rmax)
 
     if rmin_s and rmax_s:
         return f"{rmin_s}–{rmax_s}"
@@ -410,7 +460,10 @@ def _rirstr(e: dict) -> str:
 
     # Si venía "RIR 2" o "2 RIR", extrae número; si no, deja el texto
     m = re.search(r"-?\d+(\.\d+)?", legacy_s)
-    return m.group(0) if m else legacy_s
+    if m:
+        num_fmt, _ = _format_display_value(m.group(0))
+        return num_fmt
+    return legacy_s
 
 
 
@@ -520,6 +573,119 @@ def _format_peso_value(value: float) -> str:
     formatted = f"{value:.2f}".rstrip("0").rstrip(".")
     return formatted
 
+
+def _format_display_value(value) -> tuple[str, bool]:
+    """
+    Convierte un valor numérico (o string numérico) en texto sin ceros finales.
+    Retorna (valor_formateado, es_numérico).
+    """
+    if value in (None, ""):
+        return "", False
+    if isinstance(value, bool):
+        return ("Sí" if value else "No"), False
+    if isinstance(value, (int, float)):
+        num = float(value)
+        if not math.isfinite(num):
+            return "", False
+        if abs(num - round(num)) < 1e-4:
+            return str(int(round(num))), True
+        return f"{num:.2f}".rstrip("0").rstrip("."), True
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw == "":
+            return "", False
+        if re.fullmatch(r"-?\d+(?:\.\d+)?", raw):
+            num = float(raw)
+            if abs(num - round(num)) < 1e-4:
+                return str(int(round(num))), True
+            return f"{num:.2f}".rstrip("0").rstrip("."), True
+        return raw, False
+    try:
+        raw = str(value).strip()
+    except Exception:
+        return "", False
+    if raw == "":
+        return "", False
+    if re.fullmatch(r"-?\d+(?:\.\d+)?", raw):
+        num = float(raw)
+        if abs(num - round(num)) < 1e-4:
+            return str(int(round(num))), True
+        return f"{num:.2f}".rstrip("0").rstrip("."), True
+    return raw, False
+
+
+def _sanitizar_valor_reporte(valor: str, tipo: str) -> str:
+    """
+    Normaliza las entradas manuales en el reporte:
+    - `peso` y `rir`: reemplaza comas por punto y deja solo dígitos, punto y signo.
+    - `reps`: solo dígitos.
+    """
+    txt = str(valor or "").strip()
+    if not txt:
+        return ""
+    if tipo in {"peso", "rir"}:
+        txt = txt.replace(",", ".")
+        # Mantener solo números, punto y signo negativo
+        txt = re.sub(r"[^0-9\.-]", "", txt)
+        if txt.count(".") > 1:
+            head, *tail = txt.split(".")
+            txt = head + "." + "".join(tail)
+    elif tipo == "reps":
+        txt = re.sub(r"[^0-9]", "", txt)
+    return txt
+
+
+def _cardio_tiene_datos_vista(cardio: dict | None) -> bool:
+    if not isinstance(cardio, dict):
+        return False
+    for value in cardio.values():
+        if isinstance(value, str) and value.strip():
+            return True
+        if isinstance(value, (int, float)) and value is not None:
+            return True
+    return False
+
+
+def _render_cardio_block(cardio: dict) -> None:
+    if not _cardio_tiene_datos_vista(cardio):
+        return
+    tipo = str(cardio.get("tipo") or "").strip()
+    modalidad = str(cardio.get("modalidad") or "").strip()
+    campos = [
+        ("Series", "series"),
+        ("Intervalos", "intervalos"),
+        ("Trabajo · Tiempo", "tiempo_trabajo"),
+        ("Trabajo · Intensidad", "intensidad_trabajo"),
+        ("Descanso · Tiempo", "tiempo_descanso"),
+        ("Descanso · Tipo", "tipo_descanso"),
+        ("Descanso · Intensidad", "intensidad_descanso"),
+    ]
+    items_html = []
+    for label, key in campos:
+        valor, _ = _format_display_value(cardio.get(key, ""))
+        if valor:
+            items_html.append(
+                f"<div class='cardio-card__item'>"
+                f"<span class='cardio-card__label'>{html.escape(label)}</span>"
+                f"<span class='cardio-card__value'>{html.escape(valor)}</span>"
+                f"</div>"
+            )
+
+    indicaciones = str(cardio.get("indicaciones") or "").strip()
+    parts = ["<div class='cardio-card'>"]
+    title = "Cardio"
+    if tipo:
+        title += f" · {html.escape(tipo)}"
+    parts.append(f"<div class='cardio-card__title'>{title}</div>")
+    if modalidad:
+        parts.append(f"<div class='cardio-card__subtitle'>{html.escape(modalidad)}</div>")
+    if items_html:
+        parts.append(f"<div class='cardio-card__grid'>{''.join(items_html)}</div>")
+    if indicaciones:
+        parts.append(f"<div class='cardio-card__note'>{html.escape(indicaciones)}</div>")
+    parts.append("</div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
+
 # ==========================
 #  NORMALIZACIÓN / LISTAS
 # ==========================
@@ -531,9 +697,12 @@ def _repstr(e: dict) -> str:
     except:
         series = str(series) if str(series).strip() else "—"
     a = f"{series} × "
-    rmin = e.get("reps_min") or e.get("RepsMin") or e.get("repeticiones_min")
-    rmax = e.get("reps_max") or e.get("RepsMax") or e.get("repeticiones_max")
-    reps = e.get("repeticiones")
+    rmin_raw = e.get("reps_min") or e.get("RepsMin") or e.get("repeticiones_min")
+    rmax_raw = e.get("reps_max") or e.get("RepsMax") or e.get("repeticiones_max")
+    reps_raw = e.get("repeticiones")
+    rmin, _ = _format_display_value(rmin_raw)
+    rmax, _ = _format_display_value(rmax_raw)
+    reps, _ = _format_display_value(reps_raw)
     if rmin and rmax:
         return a + f"{rmin}–{rmax}"
     if rmin:
@@ -1515,6 +1684,10 @@ def ver_rutinas():
     ejercicios = obtener_lista_ejercicios(rutina_doc["rutina"][dia_sel])
     ejercicios.sort(key=ordenar_circuito)
 
+    cardio_semana = rutina_doc.get("cardio") or {}
+    cardio_info_raw = cardio_semana.get(str(dia_sel)) or cardio_semana.get(dia_sel)
+    cardio_info = cardio_info_raw if _cardio_tiene_datos_vista(cardio_info_raw) else None
+
     ejercicios_por_circuito = {}
     for e in ejercicios:
         circuito = (e.get("circuito","Z") or "Z").upper()
@@ -1529,19 +1702,22 @@ def ver_rutinas():
         st.markdown(f"<h4 class='h-accent center-text' style='text-align:center;'>{titulo}</h4>", unsafe_allow_html=True)
 
         for idx, e in enumerate(lista):
-            nombre    = e.get("ejercicio", f"Ejercicio {idx+1}")
-            peso      = e.get("peso", "")
-            tiempo    = e.get("tiempo", "")
-            velocidad = e.get("velocidad", "")
+            nombre = e.get("ejercicio", f"Ejercicio {idx+1}")
+            peso_valor, peso_es_num = _format_display_value(e.get("peso", ""))
+            tiempo_valor, tiempo_es_num = _format_display_value(e.get("tiempo", ""))
+            velocidad_valor, velocidad_es_num = _format_display_value(e.get("velocidad", ""))
 
             # 1) Video (puede venir en e['video'] o dentro de 'detalle' como link)
             video_url, detalle_visible = _video_y_detalle_desde_ejercicio(e)
 
             # 2) Línea secundaria: reps/peso/tiempo/descanso/velocidad/RIR
             partes = [f"{_repstr(e)}"]
-            if peso:      partes.append(f"{peso} kg")
-            if tiempo:    partes.append(f"{tiempo} seg")
-            if velocidad: partes.append(f"{velocidad} m/s")
+            if peso_valor:
+                partes.append(f"{peso_valor} kg" if peso_es_num else peso_valor)
+            if tiempo_valor:
+                partes.append(f"{tiempo_valor} seg" if tiempo_es_num else tiempo_valor)
+            if velocidad_valor:
+                partes.append(f"{velocidad_valor} m/s" if velocidad_es_num else velocidad_valor)
             dsc = _descanso_texto(e)
             if dsc:       partes.append(f"{dsc}")
             rir_text = _rirstr(e)
@@ -1628,9 +1804,16 @@ def ver_rutinas():
                     reps_prev = reps_alc if reps_alc is not None else ex_prev.get("reps_alcanzadas","")
                     rir_prev  = rir_alc  if rir_alc  is not None else ex_prev.get("rir_alcanzado","")
                     info_prev=[]
-                    if reps_prev not in ("",None): info_prev.append(f"Reps: {reps_prev}")
-                    if peso_prev not in ("",None): info_prev.append(f"Peso: {peso_prev}")
-                    if rir_prev  not in ("",None): info_prev.append(f"RIR: {rir_prev}")
+                    reps_txt, _ = _format_display_value(reps_prev)
+                    if reps_txt:
+                        info_prev.append(f"Reps: {reps_txt}")
+                    peso_txt, peso_num = _format_display_value(peso_prev)
+                    if peso_txt:
+                        suf = " kg" if peso_num else ""
+                        info_prev.append(f"Peso: {peso_txt}{suf}")
+                    rir_txt, _ = _format_display_value(rir_prev)
+                    if rir_txt:
+                        info_prev.append(f"RIR: {rir_txt}")
                     caption_text = " | ".join(info_prev) if info_prev else "Sin datos guardados."
                     st.markdown(f"<div class='routine-caption'>{html.escape(caption_text)}</div>", unsafe_allow_html=True)
                 else:
@@ -1698,18 +1881,21 @@ def ver_rutinas():
                         f"<div class='routine-report-grid__serie'> {s_idx + 1}</div>",
                         unsafe_allow_html=True,
                     )
-                    e["series_data"][s_idx]["reps"] = row_cols[1].text_input(
+                    reps_val = row_cols[1].text_input(
                         "Repeticiones", value=e["series_data"][s_idx].get("reps", ""),
                         placeholder="Repeticiones", key=f"rep_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
                     )
-                    e["series_data"][s_idx]["peso"] = row_cols[2].text_input(
+                    e["series_data"][s_idx]["reps"] = _sanitizar_valor_reporte(reps_val, "reps")
+                    peso_val = row_cols[2].text_input(
                         "Peso", value=e["series_data"][s_idx].get("peso", ""),
                         placeholder="Kg", key=f"peso_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
                     )
-                    e["series_data"][s_idx]["rir"] = row_cols[3].text_input(
+                    e["series_data"][s_idx]["peso"] = _sanitizar_valor_reporte(peso_val, "peso")
+                    rir_val = row_cols[3].text_input(
                         "RIR", value=e["series_data"][s_idx].get("rir", ""),
                         placeholder="RIR", key=f"rir_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
                     )
+                    e["series_data"][s_idx]["rir"] = _sanitizar_valor_reporte(rir_val, "rir")
 
                 # Comentario general
                 st.markdown("<div class='routine-caption'>Comentario general</div>", unsafe_allow_html=True)
@@ -1774,6 +1960,9 @@ def ver_rutinas():
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
+
+    if cardio_info:
+        _render_cardio_block(cardio_info)
 
     # RPE + CTA
     st.markdown("<div class='hr-light'></div>", unsafe_allow_html=True)
