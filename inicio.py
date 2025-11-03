@@ -146,6 +146,24 @@ def _rutinas_asignadas_a_entrenador(_db, correo_entrenador: str):
         except: pass
     return out
 
+
+@st.cache_data(show_spinner=False, ttl=300, max_entries=256)
+def _usuarios_por_correo():
+    mapping = {}
+    try:
+        db_local = get_db()
+        for snap in db_local.collection("usuarios").stream():
+            if not snap.exists:
+                continue
+            data = snap.to_dict() or {}
+            correo_cli = (data.get("correo") or "").strip().lower()
+            if correo_cli:
+                mapping[correo_cli] = data
+                mapping[_norm_mail(correo_cli)] = data
+    except Exception:
+        pass
+    return mapping
+
 def _doc_id_from_mail(mail: str) -> str:
     return mail.replace('@','_').replace('.','_')
 
@@ -399,9 +417,29 @@ def inicio_deportista():
         st.markdown("---")
 
         # 3) Deportistas a mi cargo (entrenador == mi correo)
-        asignadas = _rutinas_asignadas_a_entrenador(db, correo_raw)
+        usuarios_por_correo = _usuarios_por_correo()
+
+        def _cliente_es_activo(correo_cli: str) -> bool:
+            if not correo_cli:
+                return True
+            datos_cli = (
+                usuarios_por_correo.get(correo_cli)
+                or usuarios_por_correo.get(_norm_mail(correo_cli))
+            )
+            if not isinstance(datos_cli, dict):
+                return True
+            return datos_cli.get("activo") is not False
+
+        asignadas_raw = _rutinas_asignadas_a_entrenador(db, correo_raw)
+        asignadas = [
+            doc for doc in asignadas_raw
+            if _cliente_es_activo((doc.get("correo") or "").strip().lower())
+        ]
         if not asignadas:
-            st.info("No tienes deportistas asignados aún.")
+            if asignadas_raw:
+                st.info("Tus deportistas asignados están inactivos por ahora.")
+            else:
+                st.info("No tienes deportistas asignados aún.")
         else:
             ack_map = _comentarios_ack_map(db, correo_raw)
             comentarios_recientes = _comentarios_recientes_por_cliente(asignadas, ack_map)
