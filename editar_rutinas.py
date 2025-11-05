@@ -1002,7 +1002,7 @@ def editar_rutinas():
     rol_login = (st.session_state.get("rol") or "").strip().lower()
     empresa_login = empresa_de_usuario(correo_login, usuarios_map) if correo_login else EMPRESA_DESCONOCIDA
 
-    clientes_dict: dict[str, str] = {}
+    clientes_por_nombre: dict[str, list[str]] = {}
     for doc in db.collection("rutinas_semanales").stream():
         data = doc.to_dict() or {}
         nombre = (data.get("cliente") or "").strip()
@@ -1011,26 +1011,43 @@ def editar_rutinas():
             continue
 
         empresa_cli = empresa_de_usuario(correo_cli, usuarios_map)
+        entrenador_doc = (data.get("entrenador") or "").strip().lower()
         coach_cli = ((usuarios_map.get(correo_cli) or {}).get("coach_responsable") or "").strip().lower()
+        if not coach_cli:
+            coach_cli = ((data.get("coach_responsable") or "").strip().lower())
+        if not coach_cli:
+            coach_cli = entrenador_doc
 
         permitido = True
         if rol_login in ("entrenador",):
             if empresa_login == EMPRESA_ASESORIA:
-                permitido = coach_cli == correo_login
+                permitido = coach_cli == correo_login or entrenador_doc == correo_login
             elif empresa_login == EMPRESA_MOTION:
                 if empresa_cli == EMPRESA_MOTION:
                     permitido = True
                 elif empresa_cli == EMPRESA_DESCONOCIDA:
-                    permitido = coach_cli == correo_login
+                    permitido = coach_cli == correo_login or entrenador_doc == correo_login
                 else:
                     permitido = False
             else:
-                permitido = coach_cli == correo_login
+                permitido = coach_cli == correo_login or entrenador_doc == correo_login
         elif rol_login not in ("admin", "administrador"):
-            permitido = coach_cli == correo_login
+            permitido = coach_cli == correo_login or entrenador_doc == correo_login
 
-        if permitido and nombre not in clientes_dict:
-            clientes_dict[nombre] = correo_cli
+        if permitido:
+            lista = clientes_por_nombre.setdefault(nombre, [])
+            if correo_cli not in lista:
+                lista.append(correo_cli)
+
+    clientes_dict: dict[str, str] = {}
+    for nombre in sorted(clientes_por_nombre.keys()):
+        correos_unique = sorted(set(clientes_por_nombre[nombre]))
+        if len(correos_unique) == 1:
+            clientes_dict[nombre] = correos_unique[0]
+        else:
+            for correo_cli in correos_unique:
+                display = f"{nombre} ({correo_cli})"
+                clientes_dict[display] = correo_cli
 
     if not clientes_dict:
         st.warning("❌ No hay clientes con rutinas para editar.")
