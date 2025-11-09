@@ -437,6 +437,15 @@ def ver_resumen_entrenadores():
             nombre_cliente = u.get("nombre", "(sin nombre)")
             correo_cliente = u.get("correo", "")
 
+            activo_flag = u.get("activo")
+            if activo_flag is False or (
+                isinstance(activo_flag, str)
+                and activo_flag.strip().lower() in {"false", "0", "no"}
+            ):
+                if ver_diag:
+                    st.write(f"• Debug: {nombre_cliente} ({correo_cliente}) omitido por estar inactivo.")
+                continue
+
             rutina = _buscar_ultima_rutina(correo_cliente)
             if not rutina:
                 sin_rutina.append({"nombre": nombre_cliente, "correo": correo_cliente})

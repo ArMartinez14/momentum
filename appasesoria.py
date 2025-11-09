@@ -88,7 +88,7 @@ def _menu_groups(opciones_menu: list[str]) -> list[dict[str, object]]:
         "Reportes",
         SEGUIMIENTO_LABEL,
     ])
-    _agregar("admin", "Administración", ["Resumen (Admin)", "Previsualizar Correos"])
+    _agregar("admin", "Administración", ["Resumen (Admin)", "Revisar Dumbbell", "Previsualizar Correos"])
 
     restantes_final = [op for op in restantes if op in restantes_set]
     if restantes_final:
@@ -261,6 +261,7 @@ from crear_descarga import descarga_rutina
 from reportes import ver_reportes
 from admin_resumen import ver_resumen_entrenadores  # si no lo usas, puedes comentar
 from admin_email_preview import ver_previsualizacion_correos
+from revisar_dumbbell_view import revisar_dumbbell_admin_view
 from anamnesis_view import render_anamnesis, necesita_anamnesis
 
 # ➕ utilidades para cargar el módulo de seguimiento
@@ -309,7 +310,7 @@ MENU_ENTRENADOR = [
     SEGUIMIENTO_LABEL,
 ]
 
-MENU_ADMIN = MENU_ENTRENADOR + ["Resumen (Admin)", "Previsualizar Correos"]
+MENU_ADMIN = MENU_ENTRENADOR + ["Resumen (Admin)", "Revisar Dumbbell", "Previsualizar Correos"]
 
 if is_admin:
     opciones_menu = MENU_ADMIN
@@ -477,6 +478,12 @@ elif opcion in (SEGUIMIENTO_LABEL, label_seg_2):
 elif opcion == "Resumen (Admin)":
     if is_admin:
         ver_resumen_entrenadores()
+    else:
+        st.warning("Solo disponible para administradores.")
+
+elif opcion == "Revisar Dumbbell":
+    if is_admin:
+        revisar_dumbbell_admin_view()
     else:
         st.warning("Solo disponible para administradores.")
 

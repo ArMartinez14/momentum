@@ -45,6 +45,14 @@ _UI_RESTORED_FLAG = "_softlogin_ui_restored"    # evita rehidratar varias veces 
 # Qué versiones usamos para evolucionar el formato sin romper sesiones previas
 _UI_STATE_VERSION = 1
 _STYLE_FLAG = "_softlogin_styles_injected"
+_COOKIE_WAIT_TS_KEY = "_softlogin_wait_cookie_ts"
+_COOKIE_WAIT_FLAG = "_softlogin_wait_cookie"
+_COOKIE_WAIT_ABORTED = "_softlogin_wait_cookie_aborted"
+_COOKIE_WAIT_MAX_SECONDS = 1.5
+_COOKIE_WAIT_POLL_DELAY = 0.2
+_URL_TOKEN_CACHE_KEY = "_softlogin_url_token"
+_URL_TOKEN_TS_KEY = "_softlogin_url_token_ts"
+_URL_TOKEN_REFRESH_SECONDS = 45.0
 
 
 def _inject_login_styles():
@@ -263,6 +271,42 @@ def _collect_persisted_ui_state(role: str | None) -> dict:
     return snapshot
 
 
+def _clear_cookie_wait(aborted: bool = False):
+    """Limpia los indicadores de espera de cookie y opcionalmente marca abandono."""
+    st.session_state.pop(_COOKIE_WAIT_FLAG, None)
+    st.session_state.pop(_COOKIE_WAIT_TS_KEY, None)
+    if aborted:
+        st.session_state[_COOKIE_WAIT_ABORTED] = True
+    else:
+        st.session_state.pop(_COOKIE_WAIT_ABORTED, None)
+
+
+def _mark_cookie_wait():
+    """Marca que estamos esperando que el componente devuelva la cookie."""
+    if st.session_state.get(_COOKIE_WAIT_ABORTED):
+        return
+    now = time.time()
+    start = float(st.session_state.get(_COOKIE_WAIT_TS_KEY) or 0)
+    # Reinicia el contador si ya expiró para evitar desbordes.
+    if not start or (now - start) > (_COOKIE_WAIT_MAX_SECONDS * 2):
+        st.session_state[_COOKIE_WAIT_TS_KEY] = now
+    st.session_state[_COOKIE_WAIT_FLAG] = True
+
+
+def _is_waiting_for_cookie() -> bool:
+    """Indica si seguimos dentro de la ventana de espera."""
+    start = st.session_state.get(_COOKIE_WAIT_TS_KEY)
+    if not start:
+        st.session_state.pop(_COOKIE_WAIT_FLAG, None)
+        return False
+    elapsed = time.time() - float(start)
+    if elapsed <= _COOKIE_WAIT_MAX_SECONDS:
+        st.session_state[_COOKIE_WAIT_FLAG] = True
+        return True
+    _clear_cookie_wait(aborted=True)
+    return False
+
+
 def _restore_persisted_ui_state(role: str | None, state: object) -> bool:
     """Rehidrata el estado persistido. Devuelve True si se sembró algo."""
     if not isinstance(state, dict):
@@ -333,9 +377,23 @@ def _set_url_token(token: str):
     """Guarda el token firmado en la URL (?mt=...) para rehidratar sesión en móviles si la cookie no vuelve."""
     try:
         qs = dict(st.query_params)
-        if qs.get("mt") != token:
-            qs["mt"] = token
-            st.query_params.update(qs)
+        current = qs.get("mt")
+        now = time.time()
+        last_set = float(st.session_state.get(_URL_TOKEN_TS_KEY) or 0)
+
+        if current == token:
+            st.session_state[_URL_TOKEN_CACHE_KEY] = token
+            st.session_state[_URL_TOKEN_TS_KEY] = now
+            return
+
+        if current and (now - last_set) < _URL_TOKEN_REFRESH_SECONDS:
+            # Evita que Safari/Chrome estén recargando la página por cambios constantes
+            return
+
+        qs["mt"] = token
+        st.query_params.update(qs)
+        st.session_state[_URL_TOKEN_CACHE_KEY] = token
+        st.session_state[_URL_TOKEN_TS_KEY] = now
     except Exception:
         # Compatibilidad con versiones antiguas
         pass
@@ -599,6 +657,7 @@ def _hydrate_from_cookie():
 
     data = _get_cookie(cm)
     if data:
+        _clear_cookie_wait()
         # Kill-switch: si hiciste logout, ignora cookies anteriores a ese momento
         kill_ts = st.session_state.get(_KILL_TS_KEY, 0)
         cookie_ts = int(data.get(_COOKIE_TS_FIELD, 0) or 0)
@@ -627,6 +686,8 @@ def _hydrate_from_cookie():
         st.session_state[_BOOTSTRAP_FLAG] = True
         return cm
 
+    _mark_cookie_wait()
+
     # 1 solo rerun de bootstrap para que el componente devuelva cookies en el siguiente frame
     if not st.session_state.get(_BOOTSTRAP_FLAG):
         st.session_state[_BOOTSTRAP_FLAG] = True
@@ -640,6 +701,12 @@ def _hydrate_from_cookie():
 def soft_login_barrier(required_roles=None, titulo="Bienvenido", ttl_seconds: int = COOKIE_TTL_SECONDS) -> bool:
     """Login por correo con persistencia en cookie firmada + respaldo URL para móviles."""
     cm = _hydrate_from_cookie()
+
+    if _is_waiting_for_cookie():
+        placeholder = st.empty()
+        placeholder.info("Restaurando tu sesión...")
+        time.sleep(_COOKIE_WAIT_POLL_DELAY)
+        st.rerun()
 
     if st.session_state.get("correo"):
         user_data = _find_user(st.session_state.get("correo"))
@@ -798,7 +865,9 @@ def soft_logout():
               "semana_sel", "dia_sel",
               _CACHE_TOKEN_KEY, _BOOTSTRAP_FLAG,
               _PAYLOAD_KEY, _REMEMBER_KEY,
-              _UI_RESTORED_FLAG]:
+              _UI_RESTORED_FLAG,
+              _COOKIE_WAIT_FLAG, _COOKIE_WAIT_TS_KEY, _COOKIE_WAIT_ABORTED,
+              _URL_TOKEN_CACHE_KEY, _URL_TOKEN_TS_KEY]:
         st.session_state.pop(k, None)
 
     st.rerun()

@@ -228,14 +228,23 @@ COLUMNAS_TABLA = [
     "Cantidad_1",
     "Operacion_1",
     "Semanas_1",
+    "CondicionVar_1",
+    "CondicionOp_1",
+    "CondicionValor_1",
     "Variable_2",
     "Cantidad_2",
     "Operacion_2",
     "Semanas_2",
+    "CondicionVar_2",
+    "CondicionOp_2",
+    "CondicionValor_2",
     "Variable_3",
     "Cantidad_3",
     "Operacion_3",
     "Semanas_3",
+    "CondicionVar_3",
+    "CondicionOp_3",
+    "CondicionValor_3",
     "BuscarEjercicio",
 ]
 
@@ -255,6 +264,27 @@ BASE_HEADERS = [
 ]
 
 BASE_SIZES = [0.9, 2.4, 2.8, 2.0, 0.8, 1.4, 1.0, 1.3, 1.0, 0.6, 0.6, 0.6]
+
+PROGRESION_VAR_OPTIONS = ["", "peso", "velocidad", "tiempo", "descanso", "rir", "series", "repeticiones"]
+PROGRESION_OP_OPTIONS = ["", "multiplicacion", "division", "suma", "resta"]
+COND_VAR_OPTIONS = ["", "rir"]
+COND_OP_OPTIONS = ["", ">", "<", ">=", "<="]
+
+
+def _header_slug(label: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+    return slug or "col"
+
+
+METRIC_LEGEND_HTML = """
+<div class="metric-legend metric-legend--rutina">
+  <span class="metric-chip metric-chip--series">Texto Series</span>
+  <span class="metric-chip metric-chip--reps">Texto Repeticiones</span>
+  <span class="metric-chip metric-chip--peso">Texto Peso</span>
+  <span class="metric-chip metric-chip--rir">Texto RIR</span>
+  <span class="video-legend-button" role="status">Ejercicio con video</span>
+</div>
+"""
 
 
 # ===================== MAPEO RUTINA <-> UI =====================
@@ -316,6 +346,9 @@ def _ejercicio_firestore_a_fila_ui(ej: dict) -> dict:
         fila[f"Cantidad_{p}"] = ej.get(f"Cantidad_{p}", "")
         fila[f"Operacion_{p}"] = ej.get(f"Operacion_{p}", "")
         fila[f"Semanas_{p}"] = ej.get(f"Semanas_{p}", "")
+        fila[f"CondicionVar_{p}"] = ej.get(f"CondicionVar_{p}", "")
+        fila[f"CondicionOp_{p}"] = ej.get(f"CondicionOp_{p}", "")
+        fila[f"CondicionValor_{p}"] = ej.get(f"CondicionValor_{p}", "")
 
     if not fila["Video"]:
         fila["Video"] = _video_de_catalogo(fila["Ejercicio"])
@@ -332,7 +365,7 @@ def _fila_ui_a_ejercicio_firestore_legacy(fila: dict) -> dict:
     rir_max = _f(fila.get("RirMax"))
     rir_txt = fila.get("RIR") or ""
 
-    return {
+    resultado = {
         "bloque": seccion,
         "circuito": fila.get("Circuito", ""),
         "ejercicio": fila.get("Ejercicio", ""),
@@ -350,6 +383,15 @@ def _fila_ui_a_ejercicio_firestore_legacy(fila: dict) -> dict:
         "tipo": fila.get("Tipo", ""),
         "video": fila.get("Video", ""),
     }
+    for p in (1, 2, 3):
+        resultado[f"Variable_{p}"] = fila.get(f"Variable_{p}", "")
+        resultado[f"Cantidad_{p}"] = fila.get(f"Cantidad_{p}", "")
+        resultado[f"Operacion_{p}"] = fila.get(f"Operacion_{p}", "")
+        resultado[f"Semanas_{p}"] = fila.get(f"Semanas_{p}", "")
+        resultado[f"CondicionVar_{p}"] = fila.get(f"CondicionVar_{p}", "")
+        resultado[f"CondicionOp_{p}"] = fila.get(f"CondicionOp_{p}", "")
+        resultado[f"CondicionValor_{p}"] = fila.get(f"CondicionValor_{p}", "")
+    return resultado
 
 
 def claves_dias(rutina_dict: dict) -> list[str]:
@@ -581,6 +623,72 @@ def limpiar_dia(idx_dia: int):
         st.experimental_rerun()
 
 
+def _limpiar_fila_ui(key_seccion: str, fila_idx: int, seccion_actual: str, key_entrenamiento: str) -> None:
+    filas = st.session_state.get(key_seccion)
+    if not isinstance(filas, list) or not (0 <= fila_idx < len(filas)):
+        return
+    filas[fila_idx] = _fila_vacia(seccion_actual)
+
+    prefixes = [
+        "circ",
+        "buscar",
+        "select",
+        "det",
+        "ser",
+        "rmin",
+        "rmax",
+        "peso",
+        "tiempo",
+        "vel",
+        "desc",
+        "rirmin",
+        "rirmax",
+    ]
+    for pref in prefixes:
+        st.session_state.pop(f"{pref}_{key_entrenamiento}", None)
+
+    for p in (1, 2, 3):
+        st.session_state.pop(f"var{p}_{key_entrenamiento}", None)
+        st.session_state.pop(f"ope{p}_{key_entrenamiento}", None)
+        st.session_state.pop(f"cant{p}_{key_entrenamiento}", None)
+        st.session_state.pop(f"sem{p}_{key_entrenamiento}", None)
+        st.session_state.pop(f"condvar{p}_{key_entrenamiento}", None)
+        st.session_state.pop(f"condop{p}_{key_entrenamiento}", None)
+        st.session_state.pop(f"condval{p}_{key_entrenamiento}", None)
+
+    st.session_state.pop(f"prog_check_{key_entrenamiento}", None)
+    st.session_state.pop(f"copy_check_{key_entrenamiento}", None)
+    st.session_state.pop(f"delete_{key_entrenamiento}", None)
+
+
+def _limpiar_destinos_copy_state(key_seccion: str, total_dias: int) -> None:
+    prefix = f"copy_dest_{key_seccion}_"
+    for idx in range(total_dias):
+        st.session_state.pop(f"{prefix}{idx}", None)
+
+
+def _copiar_filas_a_dias(
+    filas_para_copiar: list[tuple[int, dict]],
+    destino_indices: list[int],
+    seccion: str,
+) -> None:
+    if not filas_para_copiar or not destino_indices:
+        return
+
+    seccion_slug = seccion.replace(" ", "_")
+    for dest_idx in destino_indices:
+        key_destino = f"rutina_dia_{dest_idx + 1}_{seccion_slug}"
+        destino_filas = st.session_state.setdefault(key_destino, [])
+        for fila_idx, fila_origen in filas_para_copiar:
+            while len(destino_filas) <= fila_idx:
+                destino_filas.append(_fila_vacia(seccion))
+            clon = dict(fila_origen)
+            clon["Sección"] = seccion
+            clon["Circuito"] = clamp_circuito_por_seccion(clon.get("Circuito", "") or "", seccion)
+            clon.pop("_delete_marked", None)
+            destino_filas[fila_idx] = clon
+
+
 # ===================== RENDER TABLA =====================
 def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: list[str]):
     key_seccion = f"rutina_dia_{i+1}_{seccion.replace(' ', '_')}"
@@ -794,9 +902,11 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
         st.caption("Los cambios se guardan automáticamente.")
         header_cols = st.columns(sizes)
         for c, title in zip(header_cols, headers):
-            c.markdown(f"<div class='header-center'>{title}</div>", unsafe_allow_html=True)
+            slug = _header_slug(title)
+            c.markdown(f"<div class='header-center header-center--{slug}'>{title}</div>", unsafe_allow_html=True)
 
         filas_marcadas: list[tuple[int, str]] = []
+        filas_para_copiar: list[tuple[int, dict]] = []
         pos = {header: idx for idx, header in enumerate(headers)}
 
         for idx, fila in enumerate(st.session_state[key_seccion]):
@@ -975,15 +1085,125 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
             fila["RIR"] = f"{rmin_txt}-{rmax_txt}" if (rmin_txt and rmax_txt) else (rmin_txt or rmax_txt or "")
 
             prog_cols = cols[pos["Progresión"]].columns([1, 1, 1])
-            mostrar_progresion = prog_cols[1].checkbox("", key=f"prog_check_{key_entrenamiento}_{idx}")
+            mostrar_progresion = prog_cols[1].checkbox("", key=f"prog_check_{key_entrenamiento}")
 
             copy_cols = cols[pos["Copiar"]].columns([1, 1, 1])
-            mostrar_copia = copy_cols[1].checkbox("", key=f"copy_check_{key_entrenamiento}_{idx}")
+            mostrar_copia = copy_cols[1].checkbox("", key=f"copy_check_{key_entrenamiento}")
+
+            if mostrar_progresion:
+                st.markdown(SECTION_BREAK_HTML, unsafe_allow_html=True)
+                p = int(progresion_activa.split()[-1])
+                pcols = st.columns([0.9, 0.9, 0.7, 0.8, 0.9, 0.9, 1.0])
+                var_key = f"var{p}_{key_entrenamiento}"
+                ope_key = f"ope{p}_{key_entrenamiento}"
+                cant_key = f"cant{p}_{key_entrenamiento}"
+                sem_key = f"sem{p}_{key_entrenamiento}"
+                cond_var_key = f"condvar{p}_{key_entrenamiento}"
+                cond_op_key = f"condop{p}_{key_entrenamiento}"
+                cond_val_key = f"condval{p}_{key_entrenamiento}"
+
+                fila[f"Variable_{p}"] = pcols[0].selectbox(
+                    "Variable",
+                    PROGRESION_VAR_OPTIONS,
+                    index=PROGRESION_VAR_OPTIONS.index(fila.get(f"Variable_{p}", "")) if fila.get(f"Variable_{p}", "") in PROGRESION_VAR_OPTIONS else 0,
+                    key=var_key,
+                )
+                fila[f"Operacion_{p}"] = pcols[1].selectbox(
+                    "Operación",
+                    PROGRESION_OP_OPTIONS,
+                    index=PROGRESION_OP_OPTIONS.index(fila.get(f"Operacion_{p}", "")) if fila.get(f"Operacion_{p}", "") in PROGRESION_OP_OPTIONS else 0,
+                    key=ope_key,
+                )
+                fila[f"Cantidad_{p}"] = pcols[2].text_input("Cant.", value=fila.get(f"Cantidad_{p}", ""), key=cant_key)
+                fila[f"Semanas_{p}"] = pcols[3].text_input("Semanas", value=fila.get(f"Semanas_{p}", ""), key=sem_key)
+                fila[f"CondicionVar_{p}"] = pcols[4].selectbox(
+                    "Condición",
+                    COND_VAR_OPTIONS,
+                    index=COND_VAR_OPTIONS.index(fila.get(f"CondicionVar_{p}", "")) if fila.get(f"CondicionVar_{p}", "") in COND_VAR_OPTIONS else 0,
+                    key=cond_var_key,
+                )
+                fila[f"CondicionOp_{p}"] = pcols[5].selectbox(
+                    "Operador",
+                    COND_OP_OPTIONS,
+                    index=COND_OP_OPTIONS.index(fila.get(f"CondicionOp_{p}", "")) if fila.get(f"CondicionOp_{p}", "") in COND_OP_OPTIONS else 0,
+                    key=cond_op_key,
+                )
+                fila[f"CondicionValor_{p}"] = pcols[6].text_input(
+                    "Valor condición",
+                    value=str(fila.get(f"CondicionValor_{p}", "") or ""),
+                    key=cond_val_key,
+                )
+
+            if mostrar_copia:
+                filas_para_copiar.append((idx, dict(fila)))
 
             if "Video?" in pos:
                 nombre_ej = str(fila.get("Ejercicio", "")).strip()
                 has_video = bool((fila.get("Video") or "").strip() or _video_de_catalogo(nombre_ej))
-                cols[pos["Video?"]].checkbox("", value=has_video, disabled=True, key=f"video_flag_{i}_{seccion}_{idx}")
+                video_cols = cols[pos["Video?"]].columns([1, 1, 1])
+                video_cols[1].checkbox("", value=has_video, disabled=True, key=f"video_flag_{i}_{seccion}_{idx}")
+
+            borrar_key = f"delete_{key_entrenamiento}"
+            borrar_cols = cols[pos["Borrar"]].columns([1, 1, 1])
+            marcado_borrar = borrar_cols[1].checkbox("", key=borrar_key)
+            if marcado_borrar:
+                filas_marcadas.append((idx, key_entrenamiento))
+                fila["_delete_marked"] = True
+            else:
+                fila.pop("_delete_marked", None)
+                st.session_state.pop(borrar_key, None)
+
+        total_dias = len(dias_labels)
+        if filas_para_copiar and total_dias > 1:
+            st.markdown(SECTION_BREAK_HTML, unsafe_allow_html=True)
+            st.markdown("**📋 Copiar ejercicios marcados a otros días**")
+            st.caption("Selecciona el/los día(s) destino. La copia se aplica automáticamente manteniendo el índice de fila.")
+            dest_cols = st.columns(total_dias)
+            destinos: list[int] = []
+            prefix = f"copy_dest_{key_seccion}_"
+            for dia_idx, col in enumerate(dest_cols):
+                label = dias_labels[dia_idx]
+                disabled = dia_idx == i
+                checked = col.checkbox(
+                    label,
+                    key=f"{prefix}{dia_idx}",
+                    value=st.session_state.get(f"{prefix}{dia_idx}", False),
+                    disabled=disabled,
+                )
+                if checked and not disabled:
+                    destinos.append(dia_idx)
+            if destinos:
+                _copiar_filas_a_dias(filas_para_copiar, destinos, seccion)
+        else:
+            _limpiar_destinos_copy_state(key_seccion, total_dias)
+
+        action_cols = st.columns([1.4, 5.6])
+        limpiar_clicked = action_cols[0].button("Limpiar sección", key=f"limpiar_{key_seccion}", type="secondary")
+        pending_key = f"pending_clear_{key_seccion}"
+
+        if limpiar_clicked:
+            if filas_marcadas:
+                for idx_sel, key_sel in filas_marcadas:
+                    _limpiar_fila_ui(key_seccion, idx_sel, seccion, key_sel)
+                st.session_state.pop(pending_key, None)
+                st.success("Fila(s) limpiadas ✅")
+                _trigger_rerun()
+            elif st.session_state.get(pending_key):
+                for idx_sel in range(len(st.session_state[key_seccion])):
+                    key_sel = f"{i}_{seccion.replace(' ', '_')}_{idx_sel}"
+                    _limpiar_fila_ui(key_seccion, idx_sel, seccion, key_sel)
+                st.session_state[key_seccion] = [_fila_vacia(seccion)]
+                _limpiar_destinos_copy_state(key_seccion, total_dias)
+                st.session_state.pop(pending_key, None)
+                st.success("Sección limpiada ✅")
+                _trigger_rerun()
+            else:
+                st.session_state[pending_key] = True
+
+        if st.session_state.get(pending_key) and not filas_marcadas:
+            st.warning("Vuelve a presionar **Limpiar sección** para confirmar el borrado.")
+        elif filas_marcadas:
+            st.session_state.pop(pending_key, None)
 
 
 def editar_rutinas():
@@ -1150,6 +1370,7 @@ def editar_rutinas():
         """,
         unsafe_allow_html=True,
     )
+    st.markdown(METRIC_LEGEND_HTML, unsafe_allow_html=True)
 
     tabs = st.tabs(dias_labels)
     for idx, tab in enumerate(tabs):

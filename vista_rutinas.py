@@ -422,7 +422,7 @@ st.markdown(
 )
 
 # CSS/tema unificado
-inject_theme()
+inject_theme(mode=theme_mode)
 def _rirstr(e: dict) -> str:
     """
     Devuelve el RIR en formato:
@@ -631,7 +631,19 @@ def _sanitizar_valor_reporte(valor: str, tipo: str) -> str:
             head, *tail = txt.split(".")
             txt = head + "." + "".join(tail)
     elif tipo == "reps":
-        txt = re.sub(r"[^0-9]", "", txt)
+        txt = txt.replace(",", ".")
+        match = re.search(r"-?\d+(?:\.\d+)?", txt)
+        if not match:
+            return ""
+        try:
+            valor = float(match.group(0))
+        except Exception:
+            return ""
+        if not math.isfinite(valor):
+            return ""
+        if abs(valor - round(valor)) < 1e-4:
+            return str(int(round(valor)))
+        return str(valor).rstrip("0").rstrip(".")
     return txt
 
 
@@ -1252,6 +1264,17 @@ def ver_rutinas():
             return mapping
 
         usuarios_por_correo = _usuarios_por_correo()
+        def _cliente_es_activo(correo_cliente: str) -> bool:
+            if not correo_cliente:
+                return True
+            datos_cli = (
+                usuarios_por_correo.get(correo_cliente)
+                or usuarios_por_correo.get(normalizar_correo(correo_cliente))
+            )
+            if not isinstance(datos_cli, dict):
+                return True
+            return datos_cli.get("activo") is not False
+
         empresa_entrenador = empresa_de_usuario(correo_raw, usuarios_por_correo)
         es_motion_entrenador = empresa_entrenador == EMPRESA_MOTION
         es_asesoria_entrenador = empresa_entrenador == EMPRESA_ASESORIA
@@ -1293,6 +1316,7 @@ def ver_rutinas():
             return False
 
         clientes_empresa_info: dict[str, set[str]] = {}
+        clientes_estado_por_nombre: dict[str, bool] = {}
         for r in rutinas_all:
             nombre_cli = (r.get("cliente") or "").strip()
             if not nombre_cli:
@@ -1314,6 +1338,11 @@ def ver_rutinas():
                     clientes_empresa_info[nombre_cli].add(correo_cli)
                 else:
                     clientes_empresa_info[nombre_cli].add("__no_email__")
+                activo_cli = _cliente_es_activo(correo_cli)
+                estado_previo = clientes_estado_por_nombre.get(nombre_cli)
+                clientes_estado_por_nombre[nombre_cli] = (
+                    activo_cli if estado_previo is None else (estado_previo or activo_cli)
+                )
 
         if rol_lower == "entrenador":
             if es_asesoria_entrenador:
@@ -1325,7 +1354,7 @@ def ver_rutinas():
                     correo_cli = (r.get("correo") or "").strip().lower()
                     datos_cli = usuarios_por_correo.get(correo_cli) or usuarios_por_correo.get(normalizar_correo(correo_cli)) or {}
                     coach_resp_cli = (datos_cli.get("coach_responsable") or "").strip().lower()
-                    if coach_resp_cli == correo_raw:
+                    if coach_resp_cli == correo_raw and _cliente_es_activo(correo_cli):
                         clientes_tarjetas.append(nombre_cli)
                 clientes_tarjetas = sorted(set(clientes_tarjetas))
             elif es_motion_entrenador:
@@ -1337,7 +1366,7 @@ def ver_rutinas():
                     correo_cli = (r.get("correo") or "").strip().lower()
                     datos_cli = usuarios_por_correo.get(correo_cli) or usuarios_por_correo.get(normalizar_correo(correo_cli)) or {}
                     coach_resp_cli = (datos_cli.get("coach_responsable") or "").strip().lower()
-                    if coach_resp_cli == correo_raw:
+                    if coach_resp_cli == correo_raw and _cliente_es_activo(correo_cli):
                         clientes_tarjetas.append(nombre_cli)
                 clientes_tarjetas = sorted(set(clientes_tarjetas))
             else:
@@ -1355,7 +1384,7 @@ def ver_rutinas():
                         entrenador_reg in correos_entrenador
                         or entrenador_reg_norm in correos_entrenador
                         or coach_resp_cli == correo_raw
-                    ):
+                    ) and _cliente_es_activo(correo_cli):
                         clientes_tarjetas.append(nombre_cli)
                 clientes_tarjetas = sorted(set(clientes_tarjetas))
         elif rol_lower in ("admin", "administrador") and es_motion_entrenador:
@@ -1367,11 +1396,15 @@ def ver_rutinas():
                 correo_cli = (r.get("correo") or "").strip().lower()
                 datos_cli = usuarios_por_correo.get(correo_cli) or usuarios_por_correo.get(normalizar_correo(correo_cli)) or {}
                 coach_resp_cli = (datos_cli.get("coach_responsable") or "").strip().lower()
-                if coach_resp_cli == correo_raw:
+                if coach_resp_cli == correo_raw and _cliente_es_activo(correo_cli):
                     clientes_tarjetas.append(nombre_cli)
             clientes_tarjetas = sorted(set(clientes_tarjetas))
         else:
-            clientes_tarjetas = sorted(clientes_empresa_info.keys())
+            clientes_tarjetas = sorted(
+                nombre
+                for nombre in clientes_empresa_info.keys()
+                if clientes_estado_por_nombre.get(nombre, True)
+            )
 
         if not clientes_empresa_info:
             st.info("No hay clientes registrados aún."); st.stop()
@@ -1385,7 +1418,11 @@ def ver_rutinas():
         elif es_motion_entrenador and rol_lower in ("entrenador", "admin", "administrador"):
             base_lista = []
         else:
-            base_lista = sorted(clientes_empresa_info.keys())
+            base_lista = sorted(
+                nombre
+                for nombre in clientes_empresa_info.keys()
+                if clientes_estado_por_nombre.get(nombre, True)
+            )
 
         if busqueda_lower:
             candidatos = [
@@ -1444,13 +1481,19 @@ def ver_rutinas():
                             st.rerun()
         else:
             if rol in ("entrenador", "admin", "administrador"):
+                cliente_activo = clientes_estado_por_nombre.get(cliente_sel, True)
+                badge_html = (
+                    "<span class='client-sticky__badge'>Rutina activa</span>"
+                    if cliente_activo
+                    else "<span class='client-sticky__badge' style='background:rgba(148,34,28,0.35);color:#FFD0C6;'>Deportista inactivo</span>"
+                )
                 st.markdown(
                     f"""
                     <div class='client-sticky'>
                       <div class='client-sticky__label'>Deportista seleccionado</div>
                       <div class='client-sticky__value'>
                         {cliente_sel}
-                        <span class='client-sticky__badge'>Rutina activa</span>
+                        {badge_html}
                       </div>
                     </div>
                     """,
@@ -1726,7 +1769,7 @@ def ver_rutinas():
             # 3) Texto de detalle (centrado)
             info_str = f"""
             <p style='text-align:center;
-                    color:#e5e5e5;
+                    color:var(--text-secondary-main);
                     font-size:0.95rem;
                     margin-top:6px;
                     margin-bottom:0;

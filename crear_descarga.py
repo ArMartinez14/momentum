@@ -112,8 +112,11 @@ COLUMNAS_TABLA = [
     "Tiempo", "Velocidad", "Descanso", "RIR",
     "RirMin", "RirMax", "Tipo", "Video",
     "Variable_1", "Cantidad_1", "Operacion_1", "Semanas_1",
+    "CondicionVar_1", "CondicionOp_1", "CondicionValor_1",
     "Variable_2", "Cantidad_2", "Operacion_2", "Semanas_2",
+    "CondicionVar_2", "CondicionOp_2", "CondicionValor_2",
     "Variable_3", "Cantidad_3", "Operacion_3", "Semanas_3",
+    "CondicionVar_3", "CondicionOp_3", "CondicionValor_3",
     "BuscarEjercicio"
 ]
 
@@ -124,6 +127,11 @@ BASE_HEADERS = [
 ]
 
 BASE_SIZES = [1.0, 2.5, 2.5, 2.0, 0.7, 1.4, 1.0, 1.4, 1.0, 0.6, 0.6, 0.6]
+
+PROGRESION_VAR_OPTIONS = ["", "peso", "velocidad", "tiempo", "descanso", "rir", "series", "repeticiones"]
+PROGRESION_OP_OPTIONS = ["", "multiplicacion", "division", "suma", "resta"]
+COND_VAR_OPTIONS = ["", "rir"]
+COND_OP_OPTIONS = ["", ">", "<", ">=", "<="]
 
 
 def tiene_video(nombre_ejercicio: str, ejercicios_dict: dict) -> bool:
@@ -294,11 +302,14 @@ def _ejercicio_firestore_a_fila_ui(ej: dict) -> dict:
             fila["RepsMin"], fila["RepsMax"] = mn.strip(), mx.strip()
         else:
             fila["RepsMin"], fila["RepsMax"] = rep, ""
-    for p in (1,2,3):
-        fila[f"Variable_{p}"]  = ej.get(f"Variable_{p}","")
-        fila[f"Cantidad_{p}"]  = ej.get(f"Cantidad_{p}","")
-        fila[f"Operacion_{p}"] = ej.get(f"Operacion_{p}","")
-        fila[f"Semanas_{p}"]   = ej.get(f"Semanas_{p}","")
+    for p in (1, 2, 3):
+        fila[f"Variable_{p}"] = ej.get(f"Variable_{p}", "")
+        fila[f"Cantidad_{p}"] = ej.get(f"Cantidad_{p}", "")
+        fila[f"Operacion_{p}"] = ej.get(f"Operacion_{p}", "")
+        fila[f"Semanas_{p}"] = ej.get(f"Semanas_{p}", "")
+        fila[f"CondicionVar_{p}"] = ej.get(f"CondicionVar_{p}", "")
+        fila[f"CondicionOp_{p}"] = ej.get(f"CondicionOp_{p}", "")
+        fila[f"CondicionValor_{p}"] = ej.get(f"CondicionValor_{p}", "")
     return fila
 
 def _f(v):
@@ -333,7 +344,7 @@ def _fila_ui_a_ejercicio_firestore_legacy(fila: dict) -> dict:
             rir_str = f"{rir_min_txt}-{rir_max_txt}"
         else:
             rir_str = rir_min_txt or rir_max_txt or ""
-    return {
+    resultado = {
         "bloque":    seccion,
         "circuito":  fila.get("Circuito",""),
         "ejercicio": fila.get("Ejercicio",""),
@@ -351,6 +362,15 @@ def _fila_ui_a_ejercicio_firestore_legacy(fila: dict) -> dict:
         "tipo":      fila.get("Tipo",""),
         "video":     fila.get("Video",""),
     }
+    for p in (1, 2, 3):
+        resultado[f"Variable_{p}"] = fila.get(f"Variable_{p}", "")
+        resultado[f"Cantidad_{p}"] = fila.get(f"Cantidad_{p}", "")
+        resultado[f"Operacion_{p}"] = fila.get(f"Operacion_{p}", "")
+        resultado[f"Semanas_{p}"] = fila.get(f"Semanas_{p}", "")
+        resultado[f"CondicionVar_{p}"] = fila.get(f"CondicionVar_{p}", "")
+        resultado[f"CondicionOp_{p}"] = fila.get(f"CondicionOp_{p}", "")
+        resultado[f"CondicionValor_{p}"] = fila.get(f"CondicionValor_{p}", "")
+    return resultado
 
 # =============== 🎨 LAYOUT (headers & helpers) ===============
 COL_SIZES = [0.9, 2.0, 3.0, 2.0, 0.8, 1.6, 1.0, 0.8, 1.2, 0.8]
@@ -411,6 +431,105 @@ def _render_tabla_preview(dia_label: str, ejercicios_raw):
     if not wo: st.caption("No hay ejercicios en Work Out para este día.")
     for fila in wo: _render_row_readonly(fila)
 
+
+def _limpiar_fila_manual(key_seccion: str, fila_idx: int, bloque_sel: str, key_ent: str) -> None:
+    filas = st.session_state.get(key_seccion)
+    if not isinstance(filas, list) or not (0 <= fila_idx < len(filas)):
+        return
+    filas[fila_idx] = _fila_vacia(bloque_sel)
+    prefixes = [
+        "circ",
+        "buscar",
+        "select",
+        "det",
+        "ser",
+        "rmin",
+        "rmax",
+        "peso",
+        "tiempo",
+        "vel",
+        "desc",
+        "rirmin",
+        "rirmax",
+    ]
+    for pref in prefixes:
+        st.session_state.pop(f"{pref}_{key_ent}", None)
+    for p in (1, 2, 3):
+        st.session_state.pop(f"var{p}_{key_ent}", None)
+        st.session_state.pop(f"ope{p}_{key_ent}", None)
+        st.session_state.pop(f"cant{p}_{key_ent}", None)
+        st.session_state.pop(f"sem{p}_{key_ent}", None)
+        st.session_state.pop(f"condvar{p}_{key_ent}", None)
+        st.session_state.pop(f"condop{p}_{key_ent}", None)
+        st.session_state.pop(f"condval{p}_{key_ent}", None)
+    st.session_state.pop(f"prog_check_{key_ent}", None)
+    st.session_state.pop(f"copy_check_{key_ent}", None)
+    st.session_state.pop(f"delete_{key_ent}", None)
+
+
+def _limpiar_copy_destinos_descarga(key_seccion: str, dias_disponibles: list[str]) -> None:
+    prefix = f"copy_dest_{key_seccion}_"
+    for dia in dias_disponibles:
+        st.session_state.pop(f"{prefix}{dia}", None)
+
+
+def _get_or_init_descarga_rows(
+    dia: str,
+    bloque_sel: str,
+    rutina_modificada_ref: dict,
+) -> list[dict]:
+    key_destino = f"descarga_dia_{dia}_{bloque_sel.replace(' ', '_')}"
+    filas = st.session_state.get(key_destino)
+    if not isinstance(filas, list):
+        filas = []
+    if not filas:
+        ejercicios_dest = obtener_lista_ejercicios(rutina_modificada_ref.get(dia, []))
+        filas = [
+            _ejercicio_firestore_a_fila_ui(e)
+            for e in ejercicios_dest
+            if (e.get("bloque", "") == bloque_sel or e.get("Sección", "") == bloque_sel)
+        ]
+        for fila in filas:
+            fila["Sección"] = bloque_sel
+            fila["Circuito"] = clamp_circuito_por_seccion(fila.get("Circuito", "") or "", bloque_sel)
+        st.session_state[key_destino] = filas
+    return filas
+
+
+def _copiar_filas_descarga(
+    filas_para_copiar: list[tuple[int, dict]],
+    dias_destino: list[str],
+    dia_origen: str,
+    bloque_sel: str,
+    rutina_modificada_ref: dict,
+) -> None:
+    if not filas_para_copiar or not dias_destino:
+        return
+    for dia_dest in dias_destino:
+        if dia_dest == dia_origen:
+            continue
+        dest_rows = _get_or_init_descarga_rows(dia_dest, bloque_sel, rutina_modificada_ref)
+        for fila_idx, fila_src in filas_para_copiar:
+            while len(dest_rows) <= fila_idx:
+                base = _fila_vacia(bloque_sel)
+                base["Sección"] = bloque_sel
+                base["Circuito"] = clamp_circuito_por_seccion(base.get("Circuito", "") or "", bloque_sel)
+                dest_rows.append(base)
+            clon = dict(fila_src)
+            clon["Sección"] = bloque_sel
+            clon["Circuito"] = clamp_circuito_por_seccion(clon.get("Circuito", "") or "", bloque_sel)
+            clon.pop("_delete_marked", None)
+            dest_rows[fila_idx] = clon
+
+        ejercicios_dia = obtener_lista_ejercicios(rutina_modificada_ref.get(dia_dest, []))
+        otros = [
+            e
+            for e in ejercicios_dia
+            if (e.get("bloque", "") != bloque_sel and e.get("Sección", "") != bloque_sel)
+        ]
+        rutina_modificada_ref[dia_dest] = otros + [_fila_ui_a_ejercicio_firestore_legacy(f) for f in dest_rows]
+
+
 # =============== ✏️ EDICIÓN MANUAL EN GRILLA (igual al editor) ===============
 def _asegurar_lista_session(key: str):
     if key not in st.session_state:
@@ -426,7 +545,13 @@ def _fila_vacia(seccion: str) -> dict:
     return base
 
 
-def _render_tabla_manual(dia_sel: str, bloque_sel: str, ejercicios_dia: list[dict], rutina_modificada_ref: dict):
+def _render_tabla_manual(
+    dia_sel: str,
+    bloque_sel: str,
+    ejercicios_dia: list[dict],
+    rutina_modificada_ref: dict,
+    dias_disponibles: list[str],
+):
     """
     Muestra y edita el bloque seleccionado replicando la UI de crear/editar rutina.
     Al enviar, reemplaza SOLO ese bloque dentro de rutina_modificada_ref[dia_sel].
@@ -450,6 +575,12 @@ def _render_tabla_manual(dia_sel: str, bloque_sel: str, ejercicios_dia: list[dic
         st.session_state[key_seccion] = filas_ui
 
     st.subheader(bloque_sel)
+    progresion_activa = st.radio(
+        "Progresión activa",
+        ["Progresión 1", "Progresión 2", "Progresión 3"],
+        key=f"descarga_prog_{key_seccion}",
+        horizontal=True,
+    )
 
     ejercicios_dict = EJERCICIOS
 
@@ -532,91 +663,76 @@ def _render_tabla_manual(dia_sel: str, bloque_sel: str, ejercicios_dia: list[dic
                     return ""
                 return sel
 
-            _prefill_detalle = ""
-            _prefix_busca = f"buscar_{dia_sel}_{bloque_sel.replace(' ','_')}_"
+            detalle_prefill = ""
+            pref_key = f"buscar_{dia_sel}_{bloque_sel.replace(' ','_')}_"
             try:
-                for kss, vss in st.session_state.items():
-                    if isinstance(vss, str) and kss.startswith(_prefix_busca) and vss.strip():
-                        _prefill_detalle = vss.strip()
+                for k, val in st.session_state.items():
+                    if isinstance(val, str) and k.startswith(pref_key) and val.strip():
+                        detalle_prefill = val.strip()
                         break
             except Exception:
                 pass
 
-            c1, c2 = st.columns(2)
-            with c1:
+            col_a, col_b = st.columns(2)
+            with col_a:
                 marca = st.text_input("Marca (opcional):", key=f"marca_top_{key_seccion}").strip()
-            with c2:
+            with col_b:
                 maquina = st.text_input("Máquina (opcional):", key=f"maquina_top_{key_seccion}").strip()
 
-            detalle = st.text_input("Detalle:", value=_prefill_detalle, key=f"detalle_top_{key_seccion}")
+            detalle = st.text_input("Detalle:", value=detalle_prefill, key=f"detalle_top_{key_seccion}")
 
-            c3, c4 = st.columns(2)
-            with c3:
-                caracteristica = _combo_con_agregar("Característica", catalogo_carac, key_base=f"carac_top_{dia_sel}_{bloque_sel}")
-            with c4:
-                patron = _combo_con_agregar("Patrón de Movimiento", catalogo_patron, key_base=f"patron_top_{dia_sel}_{bloque_sel}")
+            col_c, col_d = st.columns(2)
+            with col_c:
+                caracteristica = _combo_con_agregar("Característica", catalogo_carac, "carac_top")
+            with col_d:
+                patron = _combo_con_agregar("Patrón de Movimiento", catalogo_patron, "patron_top")
 
-            c5, c6 = st.columns(2)
-            with c5:
-                grupo_p = _combo_con_agregar("Grupo Muscular Principal", catalogo_grupo_p, key_base=f"grupoP_top_{dia_sel}_{bloque_sel}")
-            with c6:
-                grupo_s = _combo_con_agregar("Grupo Muscular Secundario", catalogo_grupo_s, key_base=f"grupoS_top_{dia_sel}_{bloque_sel}")
+            col_e, col_f = st.columns(2)
+            with col_e:
+                grupo_p = _combo_con_agregar("Grupo Muscular Principal", catalogo_grupo_p, "grupo_p_top")
+            with col_f:
+                grupo_s = _combo_con_agregar("Grupo Muscular Secundario", catalogo_grupo_s, "grupo_s_top")
 
-            video_url = st.text_input(
-                "URL del video (opcional):",
-                key=f"video_top_{key_seccion}",
-                placeholder="https://youtu.be/…",
-            )
+            video_url = st.text_input("URL del video (opcional):", key=f"video_top_{key_seccion}", placeholder="https://youtu.be/…")
 
-            id_impl_preview = ""
             if marca and maquina:
                 try:
-                    id_impl_preview = _resolver_id_implemento(marca, maquina)
-                    if id_impl_preview:
-                        snap_impl = get_db().collection("implementos").document(str(id_impl_preview)).get()
-                        if snap_impl.exists:
-                            data_impl = snap_impl.to_dict() or {}
-                            st.success(
-                                f"Implemento detectado: ID **{id_impl_preview}** · {data_impl.get('marca','')} – {data_impl.get('maquina','')}"
-                            )
+                    implemento_id = _resolver_id_implemento(marca, maquina)
+                    if implemento_id:
+                        snap = get_db().collection("implementos").document(str(implemento_id)).get()
+                        if snap.exists:
+                            data_impl = snap.to_dict() or {}
+                            st.success(f"Implemento detectado: ID **{implemento_id}** · {data_impl.get('marca','')} – {data_impl.get('maquina','')}")
                             pesos = data_impl.get("pesos", [])
                             if isinstance(pesos, dict):
-                                pesos_list = [v for _, v in sorted(pesos.items(), key=lambda kv: int(kv[0]))]
-                            elif isinstance(pesos, list):
-                                pesos_list = pesos
-                            else:
-                                pesos_list = []
-                            if pesos_list:
-                                st.caption("Pesos disponibles (preview): " + ", ".join(str(p) for p in pesos_list))
+                                pesos = [v for _, v in sorted(pesos.items(), key=lambda kv: int(kv[0]))]
+                            if pesos:
+                                st.caption("Pesos disponibles: " + ", ".join(str(p) for p in pesos))
                 except Exception:
                     pass
 
-            nombre_ej = " ".join([x for x in [marca, maquina, detalle] if x]).strip()
-            st.text_input("Nombre completo del ejercicio:", value=nombre_ej, key=f"nombre_top_{key_seccion}", disabled=True)
+            nombre_completo = " ".join(x for x in [marca, maquina, detalle] if x).strip()
+            st.text_input("Nombre completo del ejercicio:", value=nombre_completo, key=f"nombre_top_{key_seccion}", disabled=True)
 
-            publico_default = True if es_admin() else False
-            publico_check = st.checkbox(
-                "Hacer público (visible para todos los entrenadores)",
-                value=publico_default,
-                key=f"pub_chk_{key_seccion}",
-            )
+            publico_default = es_admin()
+            publico_check = st.checkbox("Hacer público (visible para todos los entrenadores)", value=publico_default, key=f"pub_chk_{key_seccion}")
 
-            cols_btn_save = st.columns([1, 3])
-            with cols_btn_save[0]:
+            col_btn, _ = st.columns([1, 3])
+            with col_btn:
                 if st.button("💾 Guardar Ejercicio", key=f"btn_guardar_top_{key_seccion}", type="primary", use_container_width=True):
                     faltantes = [
-                        etq
-                        for etq, val in {
+                        etiqueta
+                        for etiqueta, valor in {
                             "Característica": caracteristica,
                             "Patrón de Movimiento": patron,
                             "Grupo Muscular Principal": grupo_p,
                         }.items()
-                        if not (val or "").strip()
+                        if not (valor or "").strip()
                     ]
                     if faltantes:
                         st.warning("⚠️ Completa: " + ", ".join(faltantes))
                     else:
-                        nombre_final = (nombre_ej or detalle or maquina or marca or "").strip()
+                        nombre_final = (nombre_completo or detalle or maquina or marca or "").strip()
                         if not nombre_final:
                             st.warning("⚠️ El campo 'nombre' es obligatorio (usa al menos Detalle/Máquina/Marca).")
                         else:
@@ -708,250 +824,356 @@ def _render_tabla_manual(dia_sel: str, bloque_sel: str, ejercicios_dia: list[dic
                 res.append(nombre)
         return res
 
-    with st.form(f"form_{key_seccion}", clear_on_submit=False):
-        header_cols = st.columns(sizes)
-        for c, title in zip(header_cols, headers):
-            c.markdown(f"<div class='header-center'>{title}</div>", unsafe_allow_html=True)
+    st.caption("Los cambios se guardan automáticamente.")
+    header_cols = st.columns(sizes)
+    for c, title in zip(header_cols, headers):
+        c.markdown(f"<div class='header-center'>{title}</div>", unsafe_allow_html=True)
 
-        filas_marcadas_para_borrar = []
-        for idx, fila in enumerate(st.session_state[key_seccion]):
-            fila["Sección"] = bloque_sel
-            key_ent = f"{dia_sel}_{bloque_sel.replace(' ','_')}_{idx}"
-            cols = st.columns(sizes)
-            pos = {h: k for k, h in enumerate(headers)}
+    filas_marcadas: list[tuple[int, str]] = []
+    filas_para_copiar: list[tuple[int, dict]] = []
+    pos = {header: idx for idx, header in enumerate(headers)}
 
-            opciones_circuito = get_circuit_options(bloque_sel)
-            circ_actual = fila.get("Circuito") or ""
-            if circ_actual not in opciones_circuito:
-                circ_actual = clamp_circuito_por_seccion(circ_actual, bloque_sel)
-                fila["Circuito"] = circ_actual
+    for idx, fila in enumerate(st.session_state[key_seccion]):
+        fila["Sección"] = bloque_sel
+        key_ent = f"{dia_sel}_{bloque_sel.replace(' ','_')}_{idx}"
+        cols = st.columns(sizes)
 
-            fila["Circuito"] = cols[pos["Circuito"]].selectbox(
-                "",
-                opciones_circuito,
-                index=(opciones_circuito.index(fila["Circuito"]) if fila["Circuito"] in opciones_circuito else 0),
-                key=f"circ_{key_ent}",
-                label_visibility="collapsed",
-            )
+        opciones_circuito = get_circuit_options(bloque_sel)
+        circ_actual = fila.get("Circuito") or ""
+        if circ_actual not in opciones_circuito:
+            circ_actual = clamp_circuito_por_seccion(circ_actual, bloque_sel)
+            fila["Circuito"] = circ_actual
 
-            buscar_key = f"buscar_{key_ent}"
-            if buscar_key not in st.session_state:
-                st.session_state[buscar_key] = fila.get("BuscarEjercicio", "")
-            previo_buscar = fila.get("BuscarEjercicio", "")
-            palabra = cols[pos["Buscar Ejercicio"]].text_input(
-                "",
-                value=st.session_state[buscar_key],
-                key=buscar_key,
-                label_visibility="collapsed",
-                placeholder="Buscar ejercicio…",
-            )
-            if normalizar_texto(palabra) != normalizar_texto(previo_buscar):
-                st.session_state.pop(f"select_{key_ent}", None)
-                fila["_exact_on_load"] = False
-            fila["BuscarEjercicio"] = palabra
+        fila["Circuito"] = cols[pos["Circuito"]].selectbox(
+            "",
+            opciones_circuito,
+            index=(opciones_circuito.index(fila["Circuito"]) if fila["Circuito"] in opciones_circuito else 0),
+            key=f"circ_{key_ent}",
+            label_visibility="collapsed",
+        )
 
-            nombre_original = (fila.get("Ejercicio", "") or "").strip()
-            exact_on_load = bool(fila.get("_exact_on_load", False))
+        buscar_key = f"buscar_{key_ent}"
+        if buscar_key not in st.session_state:
+            st.session_state[buscar_key] = fila.get("BuscarEjercicio", "")
+        previo_buscar = fila.get("BuscarEjercicio", "")
+        palabra = cols[pos["Buscar Ejercicio"]].text_input(
+            "",
+            value=st.session_state[buscar_key],
+            key=buscar_key,
+            label_visibility="collapsed",
+            placeholder="Buscar ejercicio…",
+        )
+        if normalizar_texto(palabra) != normalizar_texto(previo_buscar):
+            st.session_state.pop(f"select_{key_ent}", None)
+            fila["_exact_on_load"] = False
+        fila["BuscarEjercicio"] = palabra
 
-            if exact_on_load:
-                if (not palabra.strip()) or (normalizar_texto(palabra) == normalizar_texto(nombre_original)):
-                    ejercicios_encontrados = [nombre_original] if nombre_original else []
-                else:
-                    ejercicios_encontrados = _buscar_fuzzy_local(palabra)
-                    fila["_exact_on_load"] = False
+        nombre_original = (fila.get("Ejercicio", "") or "").strip()
+        exact_on_load = bool(fila.get("_exact_on_load", False))
+
+        if exact_on_load:
+            if (not palabra.strip()) or (normalizar_texto(palabra) == normalizar_texto(nombre_original)):
+                ejercicios_encontrados = [nombre_original] if nombre_original else []
             else:
                 ejercicios_encontrados = _buscar_fuzzy_local(palabra)
+                fila["_exact_on_load"] = False
+        else:
+            ejercicios_encontrados = _buscar_fuzzy_local(palabra)
 
-            if not ejercicios_encontrados and nombre_original:
-                ejercicios_encontrados = [nombre_original]
+        if not ejercicios_encontrados and nombre_original:
+            ejercicios_encontrados = [nombre_original]
 
-            vistos = set()
-            ejercicios_encontrados = [e for e in ejercicios_encontrados if not (e in vistos or vistos.add(e))]
+        vistos = set()
+        ejercicios_encontrados = [e for e in ejercicios_encontrados if not (e in vistos or vistos.add(e))]
 
-            if not ejercicios_encontrados and palabra.strip():
-                ejercicios_encontrados = [palabra.strip()]
-            elif not ejercicios_encontrados:
-                ejercicios_encontrados = ["(sin resultados)"]
+        if not ejercicios_encontrados and palabra.strip():
+            ejercicios_encontrados = [palabra.strip()]
+        elif not ejercicios_encontrados:
+            ejercicios_encontrados = ["(sin resultados)"]
 
-            seleccionado = cols[pos["Ejercicio"]].selectbox(
-                "",
-                ejercicios_encontrados,
-                key=f"select_{key_ent}",
-                index=0,
-                label_visibility="collapsed",
-            )
-            if seleccionado == "(sin resultados)":
-                fila["Ejercicio"] = palabra.strip()
-                fila["Video"] = (ejercicios_dict.get(fila["Ejercicio"], {}) or {}).get("video", "").strip()
-            else:
-                fila["Ejercicio"] = seleccionado
-                fila["Video"] = (ejercicios_dict.get(seleccionado, {}) or {}).get("video", "").strip()
+        seleccionado = cols[pos["Ejercicio"]].selectbox(
+            "",
+            ejercicios_encontrados,
+            key=f"select_{key_ent}",
+            index=0,
+            label_visibility="collapsed",
+        )
+        if seleccionado == "(sin resultados)":
+            fila["Ejercicio"] = palabra.strip()
+            fila["Video"] = (ejercicios_dict.get(fila["Ejercicio"], {}) or {}).get("video", "").strip()
+        else:
+            fila["Ejercicio"] = seleccionado
+            fila["Video"] = (ejercicios_dict.get(seleccionado, {}) or {}).get("video", "").strip()
 
-            fila["Detalle"] = cols[pos["Detalle"]].text_input(
-                "",
-                value=fila.get("Detalle", ""),
-                key=f"det_{key_ent}",
-                label_visibility="collapsed",
-                placeholder="Notas (opcional)",
-            )
-            fila["Series"] = cols[pos["Series"]].text_input(
-                "",
-                value=fila.get("Series", ""),
-                key=f"ser_{key_ent}",
-                label_visibility="collapsed",
-                placeholder="N°",
-            )
+        fila["Detalle"] = cols[pos["Detalle"]].text_input(
+            "",
+            value=fila.get("Detalle", ""),
+            key=f"det_{key_ent}",
+            label_visibility="collapsed",
+            placeholder="Notas (opcional)",
+        )
+        fila["Series"] = cols[pos["Series"]].text_input(
+            "",
+            value=fila.get("Series", ""),
+            key=f"ser_{key_ent}",
+            label_visibility="collapsed",
+            placeholder="N°",
+        )
 
-            rep_cols = cols[pos["Repeticiones"]].columns(2)
-            fila["RepsMin"] = rep_cols[0].text_input(
-                "",
-                value=str(fila.get("RepsMin", "")),
-                key=f"rmin_{key_ent}",
-                label_visibility="collapsed",
-                placeholder="Min",
-            )
-            fila["RepsMax"] = rep_cols[1].text_input(
-                "",
-                value=str(fila.get("RepsMax", "")),
-                key=f"rmax_{key_ent}",
-                label_visibility="collapsed",
-                placeholder="Max",
-            )
+        rep_cols = cols[pos["Repeticiones"]].columns(2)
+        fila["RepsMin"] = rep_cols[0].text_input(
+            "",
+            value=str(fila.get("RepsMin", "")),
+            key=f"rmin_{key_ent}",
+            label_visibility="collapsed",
+            placeholder="Min",
+        )
+        fila["RepsMax"] = rep_cols[1].text_input(
+            "",
+            value=str(fila.get("RepsMax", "")),
+            key=f"rmax_{key_ent}",
+            label_visibility="collapsed",
+            placeholder="Max",
+        )
 
-            peso_widget_key = f"peso_{key_ent}"
-            peso_value = fila.get("Peso", "")
+        peso_widget_key = f"peso_{key_ent}"
+        peso_value = fila.get("Peso", "")
+        usar_text_input = True
+        pesos_disponibles = []
+        try:
+            nombre_ej = fila.get("Ejercicio", "")
+            ej_doc = ejercicios_dict.get(nombre_ej, {}) or {}
+            id_impl = str(ej_doc.get("id_implemento", "") or "")
+            if id_impl and id_impl != "1" and id_impl in IMPLEMENTOS:
+                pesos_disponibles = IMPLEMENTOS[id_impl].get("pesos", []) or []
+                if isinstance(pesos_disponibles, dict):
+                    pesos_disponibles = [
+                        v for _, v in sorted(pesos_disponibles.items(), key=lambda kv: int(kv[0]))
+                    ]
+                usar_text_input = not bool(pesos_disponibles)
+        except Exception:
             usar_text_input = True
-            pesos_disponibles = []
-            try:
-                nombre_ej = fila.get("Ejercicio", "")
-                ej_doc = ejercicios_dict.get(nombre_ej, {}) or {}
-                id_impl = str(ej_doc.get("id_implemento", "") or "")
-                if id_impl and id_impl != "1" and id_impl in IMPLEMENTOS:
-                    pesos_disponibles = IMPLEMENTOS[id_impl].get("pesos", []) or []
-                    if isinstance(pesos_disponibles, dict):
-                        pesos_disponibles = [
-                            v for _, v in sorted(pesos_disponibles.items(), key=lambda kv: int(kv[0]))
-                        ]
-                    usar_text_input = not bool(pesos_disponibles)
-            except Exception:
-                usar_text_input = True
 
-            if not usar_text_input and pesos_disponibles:
-                opciones_peso = [str(p) for p in pesos_disponibles]
-                if str(peso_value) not in opciones_peso:
-                    peso_value = opciones_peso[0]
-                fila["Peso"] = cols[pos["Peso"]].selectbox(
-                    "",
-                    options=opciones_peso,
-                    index=(opciones_peso.index(str(peso_value)) if str(peso_value) in opciones_peso else 0),
-                    key=peso_widget_key,
-                    label_visibility="collapsed",
-                )
-            else:
-                fila["Peso"] = cols[pos["Peso"]].text_input(
-                    "",
-                    value=str(peso_value),
-                    key=peso_widget_key,
-                    label_visibility="collapsed",
-                    placeholder="Kg",
-                )
-
-            if "Tiempo" in pos:
-                fila["Tiempo"] = cols[pos["Tiempo"]].text_input(
-                    "",
-                    value=str(fila.get("Tiempo", "")),
-                    key=f"tiempo_{key_ent}",
-                    label_visibility="collapsed",
-                    placeholder="Seg",
-                )
-            else:
-                fila.setdefault("Tiempo", "")
-
-            if "Velocidad" in pos:
-                fila["Velocidad"] = cols[pos["Velocidad"]].text_input(
-                    "",
-                    value=str(fila.get("Velocidad", "")),
-                    key=f"vel_{key_ent}",
-                    label_visibility="collapsed",
-                    placeholder="m/s",
-                )
-            else:
-                fila.setdefault("Velocidad", "")
-
-            if "Descanso" in pos:
-                opciones_descanso = ["", "1", "2", "3", "4", "5"]
-                valor_actual_desc = str(fila.get("Descanso", "")).strip().split(" ")[0]
-                idx_desc = opciones_descanso.index(valor_actual_desc) if valor_actual_desc in opciones_descanso else 0
-                fila["Descanso"] = cols[pos["Descanso"]].selectbox(
-                    "",
-                    options=opciones_descanso,
-                    index=idx_desc,
-                    key=f"desc_{key_ent}",
-                    label_visibility="collapsed",
-                    help="Minutos de descanso (1–5). Deja vacío si no aplica.",
-                )
-            else:
-                fila.setdefault("Descanso", "")
-
-            rir_cols = cols[pos["RIR (Min/Max)"]].columns(2)
-            fila["RirMin"] = rir_cols[0].text_input(
+        if not usar_text_input and pesos_disponibles:
+            opciones_peso = [str(p) for p in pesos_disponibles]
+            if str(peso_value) not in opciones_peso:
+                peso_value = opciones_peso[0]
+            fila["Peso"] = cols[pos["Peso"]].selectbox(
                 "",
-                value=str(fila.get("RirMin", "")),
-                key=f"rirmin_{key_ent}",
+                options=opciones_peso,
+                index=(opciones_peso.index(str(peso_value)) if str(peso_value) in opciones_peso else 0),
+                key=peso_widget_key,
                 label_visibility="collapsed",
-                placeholder="Min",
             )
-            fila["RirMax"] = rir_cols[1].text_input(
+        else:
+            fila["Peso"] = cols[pos["Peso"]].text_input(
                 "",
-                value=str(fila.get("RirMax", "")),
-                key=f"rirmax_{key_ent}",
+                value=str(peso_value),
+                key=peso_widget_key,
                 label_visibility="collapsed",
-                placeholder="Max",
+                placeholder="Kg",
             )
-            rmin_txt = str(fila.get("RirMin", "")).strip()
-            rmax_txt = str(fila.get("RirMax", "")).strip()
-            if rmin_txt and rmax_txt:
-                fila["RIR"] = f"{rmin_txt}-{rmax_txt}"
-            else:
-                fila["RIR"] = rmin_txt or rmax_txt or ""
 
-            cols[pos["Progresión"]].markdown("<div style='text-align:center'>—</div>", unsafe_allow_html=True)
-            cols[pos["Copiar"]].markdown("<div style='text-align:center'>—</div>", unsafe_allow_html=True)
+        if "Tiempo" in pos:
+            fila["Tiempo"] = cols[pos["Tiempo"]].text_input(
+                "",
+                value=str(fila.get("Tiempo", "")),
+                key=f"tiempo_{key_ent}",
+                label_visibility="collapsed",
+                placeholder="Seg",
+            )
+        else:
+            fila.setdefault("Tiempo", "")
 
-            if "Video?" in pos:
-                nombre_ej = str(fila.get("Ejercicio", "")).strip()
-                has_video = bool((fila.get("Video") or "").strip()) or tiene_video(nombre_ej, ejercicios_dict)
-                cols[pos["Video?"]].checkbox(
-                    "",
-                    value=has_video,
-                    key=f"video_flag_descarga_{dia_sel}_{bloque_sel}_{idx}",
-                    disabled=True,
-                )
+        if "Velocidad" in pos:
+            fila["Velocidad"] = cols[pos["Velocidad"]].text_input(
+                "",
+                value=str(fila.get("Velocidad", "")),
+                key=f"vel_{key_ent}",
+                label_visibility="collapsed",
+                placeholder="m/s",
+            )
+        else:
+            fila.setdefault("Velocidad", "")
 
-            borrar_key = f"delete_{key_ent}"
-            if cols[pos["Borrar"]].checkbox("", key=borrar_key):
-                filas_marcadas_para_borrar.append(idx)
-            else:
-                st.session_state.pop(borrar_key, None)
+        if "Descanso" in pos:
+            opciones_descanso = ["", "1", "2", "3", "4", "5"]
+            valor_actual_desc = str(fila.get("Descanso", "")).strip().split(" ")[0]
+            idx_desc = opciones_descanso.index(valor_actual_desc) if valor_actual_desc in opciones_descanso else 0
+            fila["Descanso"] = cols[pos["Descanso"]].selectbox(
+                "",
+                options=opciones_descanso,
+                index=idx_desc,
+                key=f"desc_{key_ent}",
+                label_visibility="collapsed",
+                help="Minutos de descanso (1–5). Deja vacío si no aplica.",
+            )
+        else:
+            fila.setdefault("Descanso", "")
 
-        submitted = st.form_submit_button("Aplicar cambios en este bloque", type="primary")
-        if submitted:
-            if filas_marcadas_para_borrar:
-                for idx_sel in sorted(filas_marcadas_para_borrar, reverse=True):
-                    if 0 <= idx_sel < len(st.session_state[key_seccion]):
-                        st.session_state[key_seccion].pop(idx_sel)
+        rir_cols = cols[pos["RIR (Min/Max)"]].columns(2)
+        fila["RirMin"] = rir_cols[0].text_input(
+            "",
+            value=str(fila.get("RirMin", "")),
+            key=f"rirmin_{key_ent}",
+            label_visibility="collapsed",
+            placeholder="Min",
+        )
+        fila["RirMax"] = rir_cols[1].text_input(
+            "",
+            value=str(fila.get("RirMax", "")),
+            key=f"rirmax_{key_ent}",
+            label_visibility="collapsed",
+            placeholder="Max",
+        )
+        rmin_txt = str(fila.get("RirMin", "")).strip()
+        rmax_txt = str(fila.get("RirMax", "")).strip()
+        if rmin_txt and rmax_txt:
+            fila["RIR"] = f"{rmin_txt}-{rmax_txt}"
+        else:
+            fila["RIR"] = rmin_txt or rmax_txt or ""
 
-            nuevos = [_fila_ui_a_ejercicio_firestore_legacy(f) for f in st.session_state[key_seccion]]
+        prog_cols = cols[pos["Progresión"]].columns([1, 1, 1])
+        mostrar_progresion = prog_cols[1].checkbox("", key=f"prog_check_{key_ent}")
 
-            ejercicios_dia_full = obtener_lista_ejercicios(rutina_modificada_ref.get(dia_sel, []))
-            otros = [
-                e for e in ejercicios_dia_full
-                if (e.get("bloque", "") != bloque_sel and e.get("Sección", "") != bloque_sel)
-            ]
-            rutina_modificada_ref[dia_sel] = otros + nuevos
-            st.success("✅ Bloque actualizado en la rutina de descarga")
+        copy_cols = cols[pos["Copiar"]].columns([1, 1, 1])
+        mostrar_copia = copy_cols[1].checkbox("", key=f"copy_check_{key_ent}")
 
+        if mostrar_progresion:
+            p = int(progresion_activa.split()[-1])
+            pcols = st.columns([0.9, 0.9, 0.7, 0.8, 0.9, 0.9, 1.0])
+            var_key = f"var{p}_{key_ent}"
+            ope_key = f"ope{p}_{key_ent}"
+            cant_key = f"cant{p}_{key_ent}"
+            sem_key = f"sem{p}_{key_ent}"
+            cond_var_key = f"condvar{p}_{key_ent}"
+            cond_op_key = f"condop{p}_{key_ent}"
+            cond_val_key = f"condval{p}_{key_ent}"
 
+            fila[f"Variable_{p}"] = pcols[0].selectbox(
+                "Variable",
+                PROGRESION_VAR_OPTIONS,
+                index=PROGRESION_VAR_OPTIONS.index(fila.get(f"Variable_{p}", "")) if fila.get(f"Variable_{p}", "") in PROGRESION_VAR_OPTIONS else 0,
+                key=var_key,
+            )
+            fila[f"Operacion_{p}"] = pcols[1].selectbox(
+                "Operación",
+                PROGRESION_OP_OPTIONS,
+                index=PROGRESION_OP_OPTIONS.index(fila.get(f"Operacion_{p}", "")) if fila.get(f"Operacion_{p}", "") in PROGRESION_OP_OPTIONS else 0,
+                key=ope_key,
+            )
+            fila[f"Cantidad_{p}"] = pcols[2].text_input("Cant.", value=fila.get(f"Cantidad_{p}", ""), key=cant_key)
+            fila[f"Semanas_{p}"] = pcols[3].text_input("Semanas", value=fila.get(f"Semanas_{p}", ""), key=sem_key)
+            fila[f"CondicionVar_{p}"] = pcols[4].selectbox(
+                "Condición",
+                COND_VAR_OPTIONS,
+                index=COND_VAR_OPTIONS.index(fila.get(f"CondicionVar_{p}", "")) if fila.get(f"CondicionVar_{p}", "") in COND_VAR_OPTIONS else 0,
+                key=cond_var_key,
+            )
+            fila[f"CondicionOp_{p}"] = pcols[5].selectbox(
+                "Operador",
+                COND_OP_OPTIONS,
+                index=COND_OP_OPTIONS.index(fila.get(f"CondicionOp_{p}", "")) if fila.get(f"CondicionOp_{p}", "") in COND_OP_OPTIONS else 0,
+                key=cond_op_key,
+            )
+            fila[f"CondicionValor_{p}"] = pcols[6].text_input(
+                "Valor condición",
+                value=str(fila.get(f"CondicionValor_{p}", "") or ""),
+                key=cond_val_key,
+            )
+
+        if mostrar_copia:
+            filas_para_copiar.append((idx, dict(fila)))
+
+        if "Video?" in pos:
+            nombre_ej = str(fila.get("Ejercicio", "")).strip()
+            has_video = bool((fila.get("Video") or "").strip()) or tiene_video(nombre_ej, ejercicios_dict)
+            video_cols = cols[pos["Video?"]].columns([1, 1, 1])
+            video_cols[1].checkbox(
+                "",
+                value=has_video,
+                key=f"video_flag_descarga_{dia_sel}_{bloque_sel}_{idx}",
+                disabled=True,
+            )
+
+        borrar_key = f"delete_{key_ent}"
+        borrar_cols = cols[pos["Borrar"]].columns([1, 1, 1])
+        if borrar_cols[1].checkbox("", key=borrar_key):
+            filas_marcadas.append((idx, key_ent))
+            fila["_delete_marked"] = True
+        else:
+            fila.pop("_delete_marked", None)
+            st.session_state.pop(borrar_key, None)
+
+    total_dias = len(dias_disponibles)
+    if filas_para_copiar and total_dias > 1:
+        st.markdown("**📋 Copiar ejercicios marcados a otros días**")
+        st.caption("Selecciona los días destino. La copia se ejecuta automáticamente.")
+        destinos: list[str] = []
+        prefix = f"copy_dest_{key_seccion}_"
+        layout = [0.9] * total_dias + [6]
+        dest_cols = st.columns(layout, gap="small")
+        for idx_dia, dia in enumerate(dias_disponibles):
+            col = dest_cols[idx_dia]
+            disabled = dia == dia_sel
+            checked = col.checkbox(
+                f"Día {dia}",
+                key=f"{prefix}{dia}",
+                value=st.session_state.get(f"{prefix}{dia}", False),
+                disabled=disabled,
+            )
+            if checked and not disabled:
+                destinos.append(dia)
+        if destinos:
+            _copiar_filas_descarga(filas_para_copiar, destinos, dia_sel, bloque_sel, rutina_modificada_ref)
+    else:
+        _limpiar_copy_destinos_descarga(key_seccion, dias_disponibles)
+
+    action_cols = st.columns([1.4, 1.6, 4.5])
+    limpiar_clicked = action_cols[0].button("Limpiar sección", key=f"limpiar_{key_seccion}", type="secondary")
+    aplicar_clicked = action_cols[1].button("Aplicar cambios en este bloque", key=f"aplicar_{key_seccion}", type="primary")
+    pending_key = f"pending_clear_{key_seccion}"
+
+    if limpiar_clicked:
+        if filas_marcadas:
+            for idx_sel, key_sel in filas_marcadas:
+                _limpiar_fila_manual(key_seccion, idx_sel, bloque_sel, key_sel)
+            st.session_state.pop(pending_key, None)
+            st.success("Fila(s) limpiadas ✅")
+            st.rerun()
+        elif st.session_state.get(pending_key):
+            for idx_sel in range(len(st.session_state[key_seccion])):
+                key_sel = f"{dia_sel}_{bloque_sel.replace(' ', '_')}_{idx_sel}"
+                _limpiar_fila_manual(key_seccion, idx_sel, bloque_sel, key_sel)
+            st.session_state[key_seccion] = [_fila_vacia(bloque_sel)]
+            _limpiar_copy_destinos_descarga(key_seccion, dias_disponibles)
+            st.session_state.pop(pending_key, None)
+            st.success("Sección limpiada ✅")
+            st.rerun()
+        else:
+            st.session_state[pending_key] = True
+
+    if st.session_state.get(pending_key) and not filas_marcadas:
+        st.warning("Vuelve a presionar **Limpiar sección** para confirmar el borrado.")
+    elif filas_marcadas:
+        st.session_state.pop(pending_key, None)
+
+    if aplicar_clicked:
+        if filas_marcadas:
+            for idx_sel, _ in sorted(filas_marcadas, reverse=True):
+                if 0 <= idx_sel < len(st.session_state[key_seccion]):
+                    st.session_state[key_seccion].pop(idx_sel)
+
+        nuevos = [_fila_ui_a_ejercicio_firestore_legacy(f) for f in st.session_state[key_seccion]]
+
+        ejercicios_dia_full = obtener_lista_ejercicios(rutina_modificada_ref.get(dia_sel, []))
+        otros = [
+            e
+            for e in ejercicios_dia_full
+            if (e.get("bloque", "") != bloque_sel and e.get("Sección", "") != bloque_sel)
+        ]
+        rutina_modificada_ref[dia_sel] = otros + nuevos
+        st.success("✅ Bloque actualizado en la rutina de descarga")
 # =============== 🎯 PÁGINA PRINCIPAL ===============
 def descarga_rutina():
     st.title("📉 Crear Rutina de Descarga")
@@ -1086,7 +1308,7 @@ def descarga_rutina():
         bloque_sel = st.selectbox("Selecciona el bloque:", bloques_presentes)
 
         # Grilla editable para el bloque elegido
-        _render_tabla_manual(dia_sel, bloque_sel, ejercicios_dia, rutina_modificada)
+        _render_tabla_manual(dia_sel, bloque_sel, ejercicios_dia, rutina_modificada, dias_disponibles)
 
     # =============== 👀 PREVISUALIZACIÓN (idéntico editor) ===============
     st.subheader("👀 Previsualización de la rutina de descarga (formato filas)")

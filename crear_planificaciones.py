@@ -70,7 +70,7 @@ def _vars_block(p):
     """
 
 # CSS/tema unificado
-inject_theme()
+inject_theme(mode=theme_mode)
 
 # 👇 Aquí pegas el CSS de centrado de checkboxes
 st.markdown("""
@@ -1181,11 +1181,44 @@ def crear_rutinas():
 
         st.session_state.pop(f"prog_check_{key_entrenamiento}_{fila_idx}", None)
         st.session_state.pop(f"copy_check_{key_entrenamiento}_{fila_idx}", None)
-        st.session_state.pop(f"multiselect_{key_entrenamiento}_{fila_idx}", None)
-        st.session_state.pop(f"do_copy_{key_entrenamiento}_{fila_idx}", None)
         st.session_state.pop(f"delete_{key_entrenamiento}_{fila_idx}", None)
         st.session_state.pop(f"search_cache_{key_entrenamiento}", None)
         st.session_state.pop(f"detalle_cache_{key_entrenamiento}", None)
+
+    def _limpiar_destinos_copy_state(key_seccion: str) -> None:
+        prefix = f"copy_dest_{key_seccion}_"
+        for state_key in list(st.session_state.keys()):
+            if state_key.startswith(prefix):
+                st.session_state.pop(state_key, None)
+
+    def _copiar_filas_a_dias(
+        filas_para_copiar: list[tuple[int, dict]],
+        destinos_indices: list[int],
+        seccion_actual: str,
+        columnas_tabla: list[str],
+    ) -> None:
+        if not filas_para_copiar or not destinos_indices:
+            return
+
+        seccion_slug = seccion_actual.replace(" ", "_")
+        for dest_idx in destinos_indices:
+            key_destino = f"rutina_dia_{dest_idx + 1}_{seccion_slug}"
+            destino_filas = st.session_state.setdefault(key_destino, [])
+            if not isinstance(destino_filas, list):
+                destino_filas = st.session_state[key_destino] = []
+
+            for fila_idx, fila_origen in filas_para_copiar:
+                while len(destino_filas) <= fila_idx:
+                    fila_vacia = {k: "" for k in columnas_tabla}
+                    fila_vacia["Sección"] = seccion_actual
+                    fila_vacia["Circuito"] = clamp_circuito_por_seccion(fila_vacia.get("Circuito","") or "", seccion_actual)
+                    destino_filas.append(fila_vacia)
+
+                clon = dict(fila_origen)
+                clon["Sección"] = seccion_actual
+                clon["Circuito"] = clamp_circuito_por_seccion(clon.get("Circuito","") or "", seccion_actual)
+                clon.pop("_delete_marked", None)
+                destino_filas[fila_idx] = clon
 
     progresion_activa = st.radio("Progresión activa", ["Progresión 1", "Progresión 2", "Progresión 3"],
                                  horizontal=True, index=0)
@@ -1459,8 +1492,8 @@ def crear_rutinas():
                         c.markdown(f"<div class='header-center'>{title}</div>", unsafe_allow_html=True)
 
                     filas_marcadas_para_borrar: list[tuple[int, str]] = []
-                    copiar_programadas: list[tuple[int, dict, list[str]]]
-                    copiar_programadas = []
+                    filas_para_copiar: list[tuple[int, dict]]
+                    filas_para_copiar = []
                     fuzzy_index = _get_fuzzy_index(ejercicios_dict)
                     for idx, fila in enumerate(st.session_state[key_seccion]):
                         key_entrenamiento = f"{i}_{seccion.replace(' ','_')}_{idx}"
@@ -1655,14 +1688,23 @@ def crear_rutinas():
                             key=f"rirmax_{key_entrenamiento}", label_visibility="collapsed", placeholder="Max"
                         )
 
-                        prog_cell = cols[pos["Progresión"]].columns([1, 1, 1])
-                        mostrar_progresion = prog_cell[1].checkbox("", key=f"prog_check_{key_entrenamiento}_{idx}")
+                        prog_cols = cols[pos["Progresión"]].columns([1, 1, 1])
+                        mostrar_progresion = prog_cols[1].checkbox(
+                            "",
+                            key=f"prog_check_{key_entrenamiento}_{idx}",
+                            label_visibility="collapsed",
+                        )
 
-                        copy_cell = cols[pos["Copiar"]].columns([1, 1, 1])
-                        mostrar_copia = copy_cell[1].checkbox("", key=f"copy_check_{key_entrenamiento}_{idx}")
+                        copy_cols = cols[pos["Copiar"]].columns([1, 1, 1])
+                        mostrar_copia = copy_cols[1].checkbox(
+                            "",
+                            key=f"copy_check_{key_entrenamiento}_{idx}",
+                            label_visibility="collapsed",
+                        )
 
                         borrar_key = f"delete_{key_entrenamiento}_{idx}"
-                        marcado_borrar = cols[pos["Borrar"]].checkbox("", key=borrar_key)
+                        borrar_cols = cols[pos["Borrar"]].columns([1, 1, 1])
+                        marcado_borrar = borrar_cols[1].checkbox("", key=borrar_key)
                         if marcado_borrar:
                             filas_marcadas_para_borrar.append((idx, key_entrenamiento))
                             fila["_delete_marked"] = True
@@ -1672,7 +1714,8 @@ def crear_rutinas():
                         if "Video?" in pos:
                             nombre_ej = str(fila.get("Ejercicio", "")).strip()
                             has_video = bool((fila.get("Video") or "").strip()) or tiene_video(nombre_ej, ejercicios_dict)
-                            cols[pos["Video?"]].checkbox(
+                            video_cols = cols[pos["Video?"]].columns([1, 1, 1])
+                            video_cols[1].checkbox(
                                 "",
                                 value=has_video,
                                 key=f"video_flag_{i}_{seccion}_{idx}",
@@ -1732,20 +1775,32 @@ def crear_rutinas():
                             )
 
                         if mostrar_copia:
-                            copiar_cols = st.columns([1, 3])
-                            st.caption("Selecciona día(s) para copiar. Los cambios se aplican automáticamente.")
-                            dias_copia = copiar_cols[1].multiselect(
-                                "Días destino", dias,
-                                key=f"multiselect_{key_entrenamiento}_{idx}"
+                            filas_para_copiar.append((idx, dict(fila)))
+
+                    total_dias = len(dias)
+                    if filas_para_copiar:
+                        st.markdown(SECTION_BREAK_HTML, unsafe_allow_html=True)
+                        st.markdown("**📋 Copiar ejercicios marcados a otros días**")
+                        st.caption("Selecciona día(s) destino. La copia se aplica automáticamente.")
+                        destinos_indices: list[int] = []
+                        prefix = f"copy_dest_{key_seccion}_"
+                        layout = [0.9] * total_dias + [6]
+                        dest_cols = st.columns(layout, gap="small")
+                        for dia_idx, dia_label in enumerate(dias):
+                            col = dest_cols[dia_idx]
+                            disabled = dia_idx == i
+                            checked = col.checkbox(
+                                dia_label,
+                                key=f"{prefix}{dia_idx}",
+                                value=st.session_state.get(f"{prefix}{dia_idx}", False),
+                                disabled=disabled,
                             )
-                            if dias_copia:
-                                copiar_programadas.append((idx, dict(fila), dias_copia))
-                                st.session_state[f"do_copy_{key_entrenamiento}_{idx}"] = True
-                            else:
-                                st.session_state.pop(f"do_copy_{key_entrenamiento}_{idx}", None)
-                        else:
-                            st.session_state.pop(f"multiselect_{key_entrenamiento}_{idx}", None)
-                            st.session_state.pop(f"do_copy_{key_entrenamiento}_{idx}", None)
+                            if checked and not disabled:
+                                destinos_indices.append(dia_idx)
+                        if destinos_indices:
+                            _copiar_filas_a_dias(filas_para_copiar, destinos_indices, seccion, columnas_tabla)
+                    else:
+                        _limpiar_destinos_copy_state(key_seccion)
 
                     action_cols = st.columns([1, 5], gap="small")
                     limpiar_clicked = action_cols[0].button("Limpiar sección", key=f"limpiar_{key_seccion}", type="secondary")
@@ -1769,13 +1824,9 @@ def crear_rutinas():
 
                         prefix = f"{i}_{seccion.replace(' ','_')}_"
                         for key in list(st.session_state.keys()):
-                            if (
-                                key.startswith(f"multiselect_{prefix}")
-                                or key.startswith(f"do_copy_{prefix}")
-                                or key.startswith(f"delete_{prefix}")
-                                or key.startswith(f"copy_check_{prefix}")
-                            ):
+                            if key.startswith(f"delete_{prefix}") or key.startswith(f"copy_check_{prefix}"):
                                 st.session_state.pop(key, None)
+                        _limpiar_destinos_copy_state(key_seccion)
                         st.session_state.pop(pending_key, None)
                         st.success("Sección limpiada ✅")
                         st.rerun()
@@ -1790,25 +1841,6 @@ def crear_rutinas():
                 # Normalización final de circuitos
                 for fila in st.session_state[key_seccion]:
                     fila["Circuito"] = clamp_circuito_por_seccion(fila.get("Circuito","") or "", seccion)
-
-                # Copia automática sólo cuando hay destinos seleccionados
-                for idx, fila_clon, dias_copia in copiar_programadas:
-                    if not dias_copia:
-                        continue
-                    fila_clon["Circuito"] = clamp_circuito_por_seccion(fila_clon.get("Circuito","") or "", seccion)
-                    for dia_destino in dias_copia:
-                        if dia_destino not in dias:
-                            continue
-                        idx_dia = dias.index(dia_destino)
-                        key_destino = f"rutina_dia_{idx_dia + 1}_{seccion.replace(' ', '_')}"
-                        if key_destino not in st.session_state:
-                            st.session_state[key_destino] = []
-                        while len(st.session_state[key_destino]) <= idx:
-                            fila_vacia = {k: "" for k in columnas_tabla}
-                            fila_vacia["Sección"] = seccion
-                            fila_vacia["Circuito"] = clamp_circuito_por_seccion(fila_vacia.get("Circuito","") or "", seccion)
-                            st.session_state[key_destino].append(fila_vacia)
-                        st.session_state[key_destino][idx] = dict(fila_clon)
 
                 st.markdown("</div>", unsafe_allow_html=True)  # /card
 
