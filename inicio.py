@@ -534,7 +534,7 @@ def inicio_deportista():
                     st.markdown(
                         f"""
                         <div class="card">
-                          <div style="font-weight:800; font-size:1.05rem;">{nombre_cli}</div>
+                          <div class="card__title" style="font-size:1.05rem;">{nombre_cli}</div>
                           <div class='muted' style='margin-top:6px;'>Bloque: Semana {sem_idx or '—'} de {sem_total or '—'}</div>
                           <div class='muted' style='margin-top:2px;'>Días completados: {dias_label}</div>
                           <div style='margin-top:8px;'>{fecha_badge}</div>

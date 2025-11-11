@@ -156,7 +156,7 @@ st.markdown(
     }
     .planner-card__meta {
         font-size: 0.92rem;
-        color: var(--text-main);
+        color: var(--text-secondary-main);
     }
     .planner-card__meta.muted {
         color: var(--muted);
@@ -325,7 +325,7 @@ st.markdown(
     }
     .routine-report-grid__serie {
         font-weight: 600;
-        color: var(--text-main);
+        color: var(--text-secondary-main);
         text-align: center;
         padding: 6px 0 4px;
     }
@@ -384,7 +384,7 @@ st.markdown(
     .cardio-card__subtitle {
         text-align: center;
         font-size: 0.94rem;
-        color: var(--text-main);
+        color: var(--text-secondary-main);
         margin-bottom: 10px;
     }
     .cardio-card__grid {
@@ -407,13 +407,13 @@ st.markdown(
     .cardio-card__value {
         font-size: 0.96rem;
         font-weight: 600;
-        color: var(--text-main);
+        color: var(--text-secondary-main);
     }
     .cardio-card__note {
         margin-top: 14px;
         font-size: 0.9rem;
         line-height: 1.4;
-        color: var(--text-main);
+        color: var(--text-secondary-main);
         text-align: center;
     }
     </style>
@@ -1802,7 +1802,7 @@ def ver_rutinas():
             else:
                 titulo_linea = nombre + (f" — {detalle_visible}" if detalle_visible else "")
                 st.markdown(
-                    f"<div style='font-weight:800; font-size:1.05rem; color:var(--text-main); text-align:center;'>{titulo_linea}</div>",
+                    f"<div style='font-weight:800; font-size:1.05rem; color:var(--text-secondary-main); text-align:center;'>{titulo_linea}</div>",
                     unsafe_allow_html=True
                 )
 
@@ -1815,7 +1815,7 @@ def ver_rutinas():
                 st.markdown(
                     f"<div class='comment-card' style='margin-top:6px; padding:10px 12px; border-left:3px solid var(--primary); background:rgba(15,23,42,0.35); border-radius:8px; text-align:center;'>"
                     f"<div style='font-size:0.85rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;'>Comentario del deportista</div>"
-                    f"<div style='font-size:0.96rem; color:var(--text-main); margin-top:4px;'>{html.escape(comentario_cliente)}</div>"
+                    f"<div style='font-size:0.96rem; color:var(--text-secondary-main); margin-top:4px;'>{html.escape(comentario_cliente)}</div>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )

@@ -16,6 +16,7 @@ from app_core.utils import (
     EMPRESA_MOTION,
     correo_a_doc_id,
     empresa_de_usuario,
+    usuario_activo,
 )
 from servicio_catalogos import add_item, get_catalogos
 
@@ -511,6 +512,13 @@ def _limpiar_estado_rutina():
             st.session_state.pop(key, None)
     for clave in ("dias_editables", "dias_originales", "_dia_creado_msg"):
         st.session_state.pop(clave, None)
+
+
+def limpiar_estado_editar_rutinas():
+    """Resetea los campos del editor al abandonar la vista."""
+    _limpiar_estado_rutina()
+    for key in ("_editar_rutina_actual", "_videos_pendientes", "_videos_catalogo", "_videos_checked"):
+        st.session_state.pop(key, None)
 
 
 def _cargar_rutina_en_session(rutina_dict: dict):
@@ -1254,7 +1262,7 @@ def editar_rutinas():
         elif rol_login not in ("admin", "administrador"):
             permitido = coach_cli == correo_login or entrenador_doc == correo_login
 
-        if permitido:
+        if permitido and usuario_activo(correo_cli, usuarios_map, default_if_missing=True):
             lista = clientes_por_nombre.setdefault(nombre, [])
             if correo_cli not in lista:
                 lista.append(correo_cli)

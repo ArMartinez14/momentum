@@ -103,144 +103,157 @@ def _menu_groups(opciones_menu: list[str]) -> list[dict[str, object]]:
 def _render_navigation(opciones_menu: list[str], menu_actual: str) -> None:
     if not opciones_menu:
         return
+    with st.container():
+        st.markdown("<div class='layout-shell layout-shell--nav'>", unsafe_allow_html=True)
+        try:
+            modo = _viewport_mode()
 
-    modo = _viewport_mode()
+            st.markdown(
+                """
+                <div class='nav-section'>
+                  <div class='nav-section__title'>Navegación</div>
+                  <div class='nav-section__hint'>Mantén tu flujo y vuelve a donde estabas en un toque.</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            grupos = _menu_groups(opciones_menu)
+            if not grupos:
+                return
 
-    st.markdown(
-        """
-        <div class='nav-section'>
-          <div class='nav-section__title'>Navegación</div>
-          <div class='nav-section__hint'>Mantén tu flujo y vuelve a donde estabas en un toque.</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    grupos = _menu_groups(opciones_menu)
-    if not grupos:
-        return
+            grupo_actual_id = next((g["id"] for g in grupos if menu_actual in g["items"]), None)
+            grupo_ids = [g["id"] for g in grupos]
+            grupo_sel = st.session_state.get("_nav_group")
+            if grupo_sel not in grupo_ids:
+                grupo_sel = grupo_actual_id or grupos[0]["id"]
+            st.session_state["_nav_group"] = grupo_sel
 
-    grupo_actual_id = next((g["id"] for g in grupos if menu_actual in g["items"]), None)
-    grupo_ids = [g["id"] for g in grupos]
-    grupo_sel = st.session_state.get("_nav_group")
-    if grupo_sel not in grupo_ids:
-        grupo_sel = grupo_actual_id or grupos[0]["id"]
-    st.session_state["_nav_group"] = grupo_sel
+            grupo_activo = next((g for g in grupos if g["id"] == grupo_sel), grupos[0])
+            items = grupo_activo["items"]
+            if menu_actual in items:
+                st.session_state["_nav_item_idx"] = items.index(menu_actual)
+            elif st.session_state.get("_nav_item_idx") is None or st.session_state.get("_nav_item_idx") >= len(items):
+                st.session_state["_nav_item_idx"] = 0
 
-    grupo_activo = next((g for g in grupos if g["id"] == grupo_sel), grupos[0])
-    items = grupo_activo["items"]
-    if menu_actual in items:
-        st.session_state["_nav_item_idx"] = items.index(menu_actual)
-    elif st.session_state.get("_nav_item_idx") is None or st.session_state.get("_nav_item_idx") >= len(items):
-        st.session_state["_nav_item_idx"] = 0
+            if modo == "desktop":
+                with st.container():
+                    st.markdown("<div class='nav-desktop'>", unsafe_allow_html=True)
+                    cols_groups = st.columns(len(grupos), gap="small")
+                    for col, grupo in zip(cols_groups, grupos):
+                        with col:
+                            activo = grupo["id"] == st.session_state["_nav_group"]
+                            if st.button(
+                                grupo["label"],
+                                key=f"nav_desktop_group_{grupo['id']}",
+                                type="primary" if activo else "secondary",
+                                use_container_width=True,
+                            ):
+                                st.session_state["_nav_group"] = grupo["id"]
+                                st.session_state["_nav_item_idx"] = 0
+                                if menu_actual not in grupo["items"] and grupo["items"]:
+                                    _goto(grupo["items"][0])
+                                    st.markdown("</div>", unsafe_allow_html=True)
+                                    return
 
-    if modo == "desktop":
-        with st.container():
-            st.markdown("<div class='nav-desktop'>", unsafe_allow_html=True)
-            cols_groups = st.columns(len(grupos), gap="small")
-            for col, grupo in zip(cols_groups, grupos):
-                with col:
-                    activo = grupo["id"] == st.session_state["_nav_group"]
-                    if st.button(
-                        grupo["label"],
-                        key=f"nav_desktop_group_{grupo['id']}",
-                        type="primary" if activo else "secondary",
-                        use_container_width=True,
-                    ):
-                        st.session_state["_nav_group"] = grupo["id"]
+                    if items:
+                        cols_items = st.columns(len(items), gap="small")
+                        for col, opcion in zip(cols_items, items):
+                            with col:
+                                activo = opcion == menu_actual
+                                if st.button(
+                                    opcion,
+                                    key=f"nav_desktop_item_{opcion}",
+                                    type="primary" if activo else "secondary",
+                                    use_container_width=True,
+                                ):
+                                    st.session_state["_nav_item_idx"] = items.index(opcion)
+                                    if not activo:
+                                        _goto(opcion)
+                                        st.markdown("</div>", unsafe_allow_html=True)
+                                        return
+                    st.markdown("</div>", unsafe_allow_html=True)
+                return
+
+            with st.container():
+                st.markdown("<div class='nav-mobile'>", unsafe_allow_html=True)
+
+                grupo_label_actual = next(
+                    (g["label"] for g in grupos if g["id"] == st.session_state["_nav_group"]),
+                    grupos[0]["label"],
+                )
+                etiqueta_item_actual = menu_actual if menu_actual else "Selecciona una sección"
+
+                st.markdown(
+                    f"""
+                    <div style='text-align:center;'>
+                      <div style='font-size:0.75rem; text-transform:uppercase; letter-spacing:0.14em; color:rgba(255,251,249,0.72);'>
+                        {grupo_label_actual}
+                      </div>
+                      <div style='font-weight:700; font-size:1.08rem; color:#FFFBF9; letter-spacing:0.05em;'>
+                        {etiqueta_item_actual}
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                with st.expander("Cambiar sección", expanded=False):
+                    etiquetas_grupo = [g["label"] for g in grupos]
+                    idx_defecto = etiquetas_grupo.index(grupo_label_actual) if grupo_label_actual in etiquetas_grupo else 0
+
+                    grupo_label_sel = st.radio(
+                        "Categoría",
+                        etiquetas_grupo,
+                        index=idx_defecto,
+                        key="nav_mobile_group_radio",
+                        label_visibility="collapsed",
+                    )
+
+                    grupo_seleccionado = next((g for g in grupos if g["label"] == grupo_label_sel), grupos[0])
+                    if grupo_seleccionado["id"] != st.session_state["_nav_group"]:
+                        st.session_state["_nav_group"] = grupo_seleccionado["id"]
                         st.session_state["_nav_item_idx"] = 0
-                        if menu_actual not in grupo["items"] and grupo["items"]:
-                            _goto(grupo["items"][0])
+                        if grupo_seleccionado["items"]:
+                            _goto(grupo_seleccionado["items"][0])
                             st.markdown("</div>", unsafe_allow_html=True)
                             return
 
-            if items:
-                cols_items = st.columns(len(items), gap="small")
-                for col, opcion in zip(cols_items, items):
-                    with col:
-                        activo = opcion == menu_actual
-                        if st.button(
-                            opcion,
-                            key=f"nav_desktop_item_{opcion}",
-                            type="primary" if activo else "secondary",
-                            use_container_width=True,
-                        ):
-                            st.session_state["_nav_item_idx"] = items.index(opcion)
-                            if not activo:
-                                _goto(opcion)
-                                st.markdown("</div>", unsafe_allow_html=True)
-                                return
-            st.markdown("</div>", unsafe_allow_html=True)
-        return
+                    items = grupo_seleccionado["items"]
 
-    with st.container():
-        st.markdown("<div class='nav-mobile'>", unsafe_allow_html=True)
+                    if items and menu_actual not in items:
+                        st.session_state["_nav_item_idx"] = 0
+                        _goto(items[0])
+                        st.markdown("</div>", unsafe_allow_html=True)
+                        return
 
-        grupo_label_actual = next(
-            (g["label"] for g in grupos if g["id"] == st.session_state["_nav_group"]),
-            grupos[0]["label"],
-        )
-        etiqueta_item_actual = menu_actual if menu_actual else "Selecciona una sección"
+                    if items:
+                        idx_item_actual = items.index(menu_actual) if menu_actual in items else 0
+                        opcion_sel = st.radio(
+                            "Sección",
+                            items,
+                            index=idx_item_actual,
+                            key=f"nav_mobile_item_radio_{grupo_seleccionado['id']}",
+                            label_visibility="collapsed",
+                        )
 
-        st.markdown(
-            f"""
-            <div style='text-align:center;'>
-              <div style='font-size:0.75rem; text-transform:uppercase; letter-spacing:0.14em; color:rgba(255,251,249,0.72);'>
-                {grupo_label_actual}
-              </div>
-              <div style='font-weight:700; font-size:1.08rem; color:#FFFBF9; letter-spacing:0.05em;'>
-                {etiqueta_item_actual}
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+                        if opcion_sel != menu_actual:
+                            st.session_state["_nav_item_idx"] = items.index(opcion_sel)
+                            _goto(opcion_sel)
+                            st.markdown("</div>", unsafe_allow_html=True)
+                            return
 
-        with st.expander("Cambiar sección", expanded=False):
-            etiquetas_grupo = [g["label"] for g in grupos]
-            idx_defecto = etiquetas_grupo.index(grupo_label_actual) if grupo_label_actual in etiquetas_grupo else 0
-
-            grupo_label_sel = st.radio(
-                "Categoría",
-                etiquetas_grupo,
-                index=idx_defecto,
-                key="nav_mobile_group_radio",
-                label_visibility="collapsed",
-            )
-
-            grupo_seleccionado = next((g for g in grupos if g["label"] == grupo_label_sel), grupos[0])
-            if grupo_seleccionado["id"] != st.session_state["_nav_group"]:
-                st.session_state["_nav_group"] = grupo_seleccionado["id"]
-                st.session_state["_nav_item_idx"] = 0
-                if grupo_seleccionado["items"]:
-                    _goto(grupo_seleccionado["items"][0])
-                    st.markdown("</div>", unsafe_allow_html=True)
-                    return
-
-            items = grupo_seleccionado["items"]
-
-            if items and menu_actual not in items:
-                st.session_state["_nav_item_idx"] = 0
-                _goto(items[0])
                 st.markdown("</div>", unsafe_allow_html=True)
-                return
+        finally:
+            st.markdown("</div>", unsafe_allow_html=True)
 
-            if items:
-                idx_item_actual = items.index(menu_actual) if menu_actual in items else 0
-                opcion_sel = st.radio(
-                    "Sección",
-                    items,
-                    index=idx_item_actual,
-                    key=f"nav_mobile_item_radio_{grupo_seleccionado['id']}",
-                    label_visibility="collapsed",
-                )
+def _limpiar_estado_por_menu(menu_label: str | None) -> None:
+    if not menu_label:
+        return
+    if menu_label == "Crear Rutinas":
+        limpiar_estado_crear_rutinas()
+    elif menu_label == "Editar Rutinas":
+        limpiar_estado_editar_rutinas()
 
-                if opcion_sel != menu_actual:
-                    st.session_state["_nav_item_idx"] = items.index(opcion_sel)
-                    _goto(opcion_sel)
-                    st.markdown("</div>", unsafe_allow_html=True)
-                    return
-
-        st.markdown("</div>", unsafe_allow_html=True)
 
 # 2) Soft login (usa el módulo que ya probaste)
 from soft_login_full import soft_login_barrier, soft_logout
@@ -255,8 +268,8 @@ from seccion_ejercicios import base_ejercicios
 from vista_rutinas import ver_rutinas
 from borrar_rutinas import borrar_rutinas
 from ingresar_cliente_view import ingresar_cliente_o_video_o_ejercicio
-from crear_planificaciones import crear_rutinas
-from editar_rutinas import editar_rutinas
+from crear_planificaciones import crear_rutinas, limpiar_estado_crear_rutinas
+from editar_rutinas import editar_rutinas, limpiar_estado_editar_rutinas
 from crear_descarga import descarga_rutina
 from reportes import ver_reportes
 from admin_resumen import ver_resumen_entrenadores  # si no lo usas, puedes comentar
@@ -355,6 +368,8 @@ if anamnesis_pendiente and menu_actual != "Anamnesis":
 
 last_menu = st.session_state.get("_last_menu")
 menu_cambio = last_menu != menu_actual
+if menu_cambio and last_menu:
+    _limpiar_estado_por_menu(last_menu)
 st.session_state["_last_menu"] = menu_actual
 
 header = st.container()

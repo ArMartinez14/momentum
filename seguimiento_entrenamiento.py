@@ -9,6 +9,7 @@ import streamlit as st
 from firebase_admin import firestore
 from app_core.firebase_client import get_db
 from app_core.theme import inject_theme
+from app_core.utils import correo_a_doc_id, usuario_activo
 
 # =============================
 #  Estilos / Constantes
@@ -69,14 +70,35 @@ def clasificar_categoria(reps_min: int | None) -> str:
 # =============================
 #  Lectura de datos (según tu esquema real)
 # =============================
+def _usuarios_por_correo(db) -> dict[str, dict]:
+    mapping: dict[str, dict] = {}
+    try:
+        for snap in db.collection("usuarios").stream():
+            if not snap.exists:
+                continue
+            data = snap.to_dict() or {}
+            correo_u = normalizar_id(data.get("correo") or "")
+            if not correo_u:
+                continue
+            mapping[correo_u] = data
+            mapping[correo_a_doc_id(correo_u)] = data
+    except Exception:
+        return mapping
+    return mapping
+
+
 def listar_clientes_con_rutinas(db) -> list[str]:
     """Correos únicos desde 'rutinas_semanales' (campo 'correo')."""
+    usuarios_map = _usuarios_por_correo(db)
     correos = set()
     for doc in db.collection("rutinas_semanales").limit(1000).stream():
         data = doc.to_dict() or {}
         email = data.get("correo")
-        if email:
-            correos.add(normalizar_id(email))
+        correo_norm = normalizar_id(email)
+        if not correo_norm:
+            continue
+        if usuario_activo(correo_norm, usuarios_map, default_if_missing=True):
+            correos.add(correo_norm)
     return sorted(correos)
 
 def listar_evaluaciones_cliente(db, correo: str) -> list[dict]:

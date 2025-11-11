@@ -84,7 +84,7 @@ def _inject_login_styles():
             box-shadow:
                 0 32px 64px rgba(214, 64, 69, 0.22),
                 0 0 0 1px rgba(214, 64, 69, 0.12) inset;
-            color: var(--text-main);
+            color: var(--text-secondary-main);
         }
         div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) > span.softlogin-card-marker {
             display: none;
@@ -131,7 +131,7 @@ def _inject_login_styles():
         }
         div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) input {
             background: transparent !important;
-            color: var(--text-main) !important;
+            color: var(--text-secondary-main) !important;
             font-size: 1rem;
             font-weight: 500;
             letter-spacing: 0.01em;
@@ -200,7 +200,7 @@ def _inject_login_styles():
             border: 1px solid rgba(214, 64, 69, 0.26);
         }
         div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) [data-testid="stInfo"] p {
-            color: var(--text-main);
+            color: var(--text-secondary-main);
         }
         @media (max-width: 640px) {
             div[data-testid="stVerticalBlock"]:has(> span.softlogin-card-marker) {

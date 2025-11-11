@@ -9,11 +9,12 @@ import json
 import copy
 
 from app_core.utils import (
-    empresa_de_usuario,
-    EMPRESA_MOTION,
     EMPRESA_ASESORIA,
     EMPRESA_DESCONOCIDA,
+    EMPRESA_MOTION,
     correo_a_doc_id,
+    empresa_de_usuario,
+    usuario_activo,
 )
 from app_core.firebase_client import get_db
 from servicio_catalogos import get_catalogos, add_item
@@ -1217,7 +1218,7 @@ def descarga_rutina():
         elif rol_login not in ("admin", "administrador"):
             permitido = coach_cli == correo_login
 
-        if permitido:
+        if permitido and usuario_activo(correo_cli, usuarios_map, default_if_missing=True):
             clientes_dict[nombre] = correo_cli
 
     if not clientes_dict:
