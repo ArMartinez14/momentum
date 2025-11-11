@@ -89,7 +89,11 @@ def usuario_es_asesoria(correo: str, usuarios_cache: Dict[str, Dict[str, Any]] |
     return empresa_de_usuario(correo, usuarios_cache) == EMPRESA_ASESORIA
 
 
-def usuario_activo(correo: str, usuarios_cache: Dict[str, Dict[str, Any]] | None = None) -> bool:
+def usuario_activo(
+    correo: str,
+    usuarios_cache: Dict[str, Dict[str, Any]] | None = None,
+    default_if_missing: bool = False,
+) -> bool:
     correo_norm = normalizar_correo(correo)
     if not correo_norm:
         return False
@@ -107,10 +111,23 @@ def usuario_activo(correo: str, usuarios_cache: Dict[str, Dict[str, Any]] | None
         data = _fetch_usuario_por_doc_id(correo_a_doc_id(correo_norm))
 
     if not isinstance(data, dict):
-        return False
+        return default_if_missing
 
     activo = data.get("activo")
-    return False if activo is False else True
+
+    if isinstance(activo, str):
+        flag = activo.strip().lower()
+        if flag in {"false", "0", "no", "inactivo", "inactive"}:
+            return False
+        if flag in {"true", "1", "si", "sí", "activo", "active"}:
+            return True
+
+    if activo is False:
+        return False
+    if activo is True:
+        return True
+
+    return True
 
 
 def set_usuario_activo(correo: str, activo: bool = True) -> None:
