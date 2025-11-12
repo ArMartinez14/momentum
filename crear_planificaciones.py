@@ -2170,6 +2170,8 @@ def crear_rutinas():
             st.info("No hay datos de series aún.")
         st.markdown("</div>", unsafe_allow_html=True)
     
+    ejercicios_sin_catalogo: list[dict] = []  # lista global para avisos fuera del bloque
+
     if es_categoria_grupo and ejercicios_sin_grupo:
         st.markdown("<div class='sidebar-card' style='margin-top:12px'>", unsafe_allow_html=True)
         st.markdown("#### Completar grupos musculares pendientes")
