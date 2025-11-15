@@ -4,7 +4,6 @@ import unicodedata
 from datetime import date, timedelta, datetime, timezone
 import pandas as pd
 import uuid
-from urllib.parse import parse_qs, urlencode, urlparse
 # Catálogos para caracteristica / patrón / grupo
 from servicio_catalogos import get_catalogos, add_item
 from firebase_admin import firestore
@@ -48,6 +47,7 @@ LIGHT = dict(
 from app_core.cache import cache_data, clear_cache
 from app_core.firebase_client import get_db
 from app_core.theme import inject_theme
+from app_core.video_utils import normalizar_link_youtube as _normalizar_link_youtube
 from app_core.utils import (
     EMPRESA_ASESORIA,
     EMPRESA_DESCONOCIDA,
@@ -144,6 +144,7 @@ def tiene_video(nombre_ejercicio: str, ejercicios_dict: dict[str, dict]) -> bool
 
 
 _CUSTOM_CIRCUITOS_KEY = "_custom_circuitos_por_seccion"
+_RUTINA_STATE_OWNER_KEY = "_rutina_dias_owner"
 
 
 def _registrar_circuito_personalizado(seccion: str, circuito: str) -> None:
@@ -237,76 +238,6 @@ def _resolver_id_implemento(marca: str, maquina: str) -> str:
         return ""
 
 _VIDEO_URL_REGEX = _re_mod.compile(r"(https?://[^\s]+)", _re_mod.IGNORECASE)
-
-_YOUTUBE_ALLOWED_HOSTS = {
-    "youtube.com",
-    "m.youtube.com",
-    "music.youtube.com",
-    "youtu.be",
-    "youtube-nocookie.com",
-    "www.youtube.com",
-    "www.youtu.be",
-    "www.youtube-nocookie.com",
-}
-
-
-def _normalizar_link_youtube(url: str) -> str:
-    """Devuelve un link https://www.youtube.com/watch?v=ID normalizado o ''."""
-    raw = str(url or "").strip()
-    if not raw:
-        return ""
-
-    if not raw.lower().startswith(("http://", "https://")):
-        raw = f"https://{raw}"
-
-    try:
-        parsed = urlparse(raw)
-    except Exception:
-        return ""
-
-    host = parsed.netloc.lower()
-    if host.startswith("www."):
-        host = host[4:]
-
-    if host not in _YOUTUBE_ALLOWED_HOSTS:
-        return ""
-
-    path = (parsed.path or "").strip()
-    video_id = ""
-
-    if host.endswith("youtu.be"):
-        video_id = path.lstrip("/").split("/")[0]
-    elif "/shorts/" in path:
-        video_id = path.split("/shorts/", 1)[1].split("/", 1)[0]
-    elif path.startswith("/embed/"):
-        video_id = path.split("/embed/", 1)[1].split("/", 1)[0]
-    else:
-        qs = parse_qs(parsed.query or "")
-        if qs.get("v"):
-            video_id = qs["v"][0]
-        else:
-            segments = [seg for seg in path.split("/") if seg]
-            if segments and segments[0] == "watch" and len(segments) > 1:
-                video_id = segments[1]
-
-    video_id = video_id.strip()
-    if not video_id:
-        return ""
-
-    video_id = _re_mod.sub(r"[^0-9A-Za-z_-]", "", video_id)
-    if not video_id:
-        return ""
-
-    qs_values = parse_qs(parsed.query or "")
-    extra_params = {}
-    for key in ("t", "start"):
-        if key in qs_values and qs_values[key]:
-            extra_params[key] = qs_values[key][-1]
-
-    query = {"v": video_id}
-    query.update(extra_params)
-    query_str = urlencode(query)
-    return f"https://www.youtube.com/watch?{query_str}"
 
 def _extraer_video_desde_detalle(texto: str) -> str:
     """Devuelve el primer link http(s) encontrado en el detalle."""
@@ -681,6 +612,11 @@ def _ejercicio_firestore_a_fila_ui_min(ej: dict) -> dict:
 
     return fila
 
+def _hay_dias_en_session() -> bool:
+    """Detecta si hay filas de rutina en session_state (Warm Up / Work Out)."""
+    return any(isinstance(k, str) and k.startswith("rutina_dia_") for k in st.session_state.keys())
+
+
 def _vaciar_dias_en_session():
     """Limpia todos los días ya cargados en session_state para evitar mezclas."""
     keys = [k for k in list(st.session_state.keys()) if k.startswith("rutina_dia_")]
@@ -691,6 +627,20 @@ def _vaciar_dias_en_session():
         if any(p in k for p in ["_Warm_Up_", "_Work_Out_", "_Cardio_", "multiselect_", "do_copy_"]):
             st.session_state.pop(k, None)
     st.session_state.pop(_CUSTOM_CIRCUITOS_KEY, None)
+    st.session_state.pop(_RUTINA_STATE_OWNER_KEY, None)
+
+
+def _marcar_dias_para_crear():
+    """
+    Garantiza que los días cargados pertenezcan a la vista Crear Rutinas.
+    Si venimos de Editar (o de otra parte), se limpian antes de continuar.
+    """
+    owner = st.session_state.get(_RUTINA_STATE_OWNER_KEY)
+    if owner == "crear":
+        return
+    if owner or _hay_dias_en_session():
+        _vaciar_dias_en_session()
+    st.session_state[_RUTINA_STATE_OWNER_KEY] = "crear"
 
 
 def limpiar_estado_crear_rutinas():
@@ -741,6 +691,7 @@ def cargar_doc_en_session_base(rutina_dict: dict):
                 wo.append(fila)
         st.session_state[f"rutina_dia_{int(d)}_Warm_Up"] = wu
         st.session_state[f"rutina_dia_{int(d)}_Work_Out"] = wo
+    st.session_state[_RUTINA_STATE_OWNER_KEY] = "crear"
 
 
 def _trigger_rerun():
@@ -964,6 +915,8 @@ def crear_rutinas():
     if rol not in ("entrenador", "admin", "administrador"):
         st.warning("No tienes permisos para crear rutinas.")
         return
+
+    _marcar_dias_para_crear()
 
     st.markdown("<h2 class='h-accent'>Crear nueva rutina</h2>", unsafe_allow_html=True)
 
@@ -1865,16 +1818,20 @@ def crear_rutinas():
                     else:
                         fila.pop("_delete_marked", None)
 
-                    if "Video" in pos:
+                    video_col_idx = pos.get("Video")
+                    if video_col_idx is not None:
                         nombre_ej = str(fila.get("Ejercicio", "")).strip()
                         video_url = str(fila.get("Video") or "").strip()
                         if not video_url and nombre_ej:
                             meta_video = ejercicios_dict.get(nombre_ej, {}) or {}
                             video_url = str(meta_video.get("video") or meta_video.get("Video") or "").strip()
-                        video_cols = cols[pos["Video"]].columns([1, 1, 1])
-                        if video_url:
+                        video_cols = cols[video_col_idx].columns([1, 1, 1])
+                        video_url_norm = _normalizar_link_youtube(video_url)
+                        if video_url_norm:
                             with video_cols[1].popover("▶️", use_container_width=False):
-                                st.video(video_url)
+                                st.video(video_url_norm)
+                        elif video_url:
+                            video_cols[1].markdown(f"[Ver video]({video_url})")
                         else:
                             video_cols[1].markdown("")
 

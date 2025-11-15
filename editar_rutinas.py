@@ -12,6 +12,10 @@ from firebase_admin import firestore
 from app_core.ejercicios_catalogo import obtener_ejercicios_disponibles
 from app_core.firebase_client import get_db
 from app_core.theme import inject_theme
+from app_core.video_utils import (
+    normalizar_link_youtube as _normalizar_link_youtube,
+    normalizar_video_url as _normalizar_video_url,
+)
 from app_core.utils import (
     EMPRESA_ASESORIA,
     EMPRESA_DESCONOCIDA,
@@ -29,6 +33,7 @@ DEFAULT_WU_ROWS_NEW_DAY = 0
 DEFAULT_WO_ROWS_NEW_DAY = 0
 SECTION_BREAK_HTML = "<div style='height:0;margin:14px 0;'></div>"
 SECTION_CONTAINER_HTML = "<div class='editor-block'>"
+RUTINA_STATE_OWNER_KEY = "_rutina_dias_owner"
 
 # ===================== 🔧 HELPERS BÁSICOS =====================
 def normalizar_texto(valor: str) -> str:
@@ -51,6 +56,67 @@ def _f(valor) -> float | None:
 def _video_de_catalogo(nombre: str) -> str:
     meta = EJERCICIOS.get(nombre, {}) or {}
     return (meta.get("video") or meta.get("Video") or "").strip()
+
+
+def _buscable_id(nombre: str) -> str:
+    return normalizar_texto(nombre).replace(" ", "_")
+
+
+def _candidatos_por_slug(db, slug: str) -> list[dict]:
+    if not slug:
+        return []
+    cache = st.session_state.setdefault("_catalogo_por_slug_cache", {})
+    if slug in cache:
+        return cache[slug]
+    try:
+        snaps = list(db.collection("ejercicios").where("buscable_id", "==", slug).stream())
+    except Exception as exc:
+        if not st.session_state.get("_catalogo_slug_cache_error"):
+            st.warning(f"No se pudo leer el catálogo de ejercicios para validar videos: {exc}")
+            st.session_state["_catalogo_slug_cache_error"] = True
+        cache[slug] = []
+        return []
+    resultado: list[dict] = []
+    for snap in snaps:
+        if not snap.exists:
+            continue
+        data = snap.to_dict() or {}
+        data["_doc_id"] = snap.id
+        resultado.append(data)
+    cache[slug] = resultado
+    return resultado
+
+
+def _video_catalogo_para_nombre(db, nombre: str, correo_entrenador: str) -> tuple[str, str]:
+    slug = _buscable_id(nombre)
+    if not slug:
+        return "", ""
+    candidatos = _candidatos_por_slug(db, slug)
+    if not candidatos:
+        return "", ""
+    correo_norm = (correo_entrenador or "").strip().lower()
+    mejor_video = ""
+    mejor_doc = ""
+    mejor_prioridad = -1
+    for candidato in candidatos:
+        video = (candidato.get("video") or candidato.get("Video") or "").strip()
+        if not video:
+            continue
+        entrenador_doc = (candidato.get("entrenador") or "").strip().lower()
+        prioridad = 0
+        if correo_norm and entrenador_doc and entrenador_doc == correo_norm:
+            prioridad = 3
+        elif not entrenador_doc:
+            prioridad = 2
+        elif candidato.get("publico"):
+            prioridad = 1
+        if prioridad > mejor_prioridad:
+            mejor_prioridad = prioridad
+            mejor_video = video
+            mejor_doc = candidato.get("_doc_id") or ""
+    if mejor_prioridad < 0:
+        return "", ""
+    return mejor_video, mejor_doc
 
 
 def _norm_text_admin(valor: str) -> str:
@@ -209,6 +275,104 @@ def obtener_lista_ejercicios(data_dia):
         return [data_dia]
     return []
 
+
+def _es_ejercicio_dict(entry) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    nombre = (entry.get("Ejercicio") or entry.get("ejercicio") or "").strip()
+    return bool(nombre)
+
+
+def _iterar_ejercicios_en_obj(data) -> list[dict]:
+    """Devuelve todas las referencias de ejercicios sin importar la estructura del día."""
+    ejercicios: list[dict] = []
+    stack = [data]
+    while stack:
+        actual = stack.pop()
+        if isinstance(actual, dict):
+            if _es_ejercicio_dict(actual):
+                ejercicios.append(actual)
+                continue
+            for value in actual.values():
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(actual, list):
+            for item in actual:
+                if isinstance(item, (dict, list)):
+                    stack.append(item)
+    return ejercicios
+
+
+def _obtener_data_dia(rutina: dict, dia_clave: str):
+    claves = [dia_clave]
+    try:
+        idx = int(dia_clave)
+        claves.append(str(idx))
+        claves.append(idx)
+    except Exception:
+        claves.append(str(dia_clave))
+    for clave in claves:
+        if clave in rutina:
+            return rutina[clave]
+    return None
+
+
+def _aplicar_videos_faltantes_en_obj(obj, pendientes: list[dict]) -> int:
+    cambios = 0
+    if isinstance(obj, dict):
+        if _es_ejercicio_dict(obj):
+            video_actual = (obj.get("Video") or obj.get("video") or "").strip()
+            if not video_actual:
+                nombre = (obj.get("Ejercicio") or obj.get("ejercicio") or "").strip()
+                nombre_norm = normalizar_texto(nombre)
+                idx = next((i for i, item in enumerate(pendientes) if item["nombre_norm"] == nombre_norm), None)
+                if idx is not None:
+                    link = pendientes.pop(idx)["link"]
+                    obj["Video"] = link
+                    obj["video"] = link
+                    cambios += 1
+            return cambios
+        for valor in obj.values():
+            if isinstance(valor, (dict, list)):
+                cambios += _aplicar_videos_faltantes_en_obj(valor, pendientes)
+    elif isinstance(obj, list):
+        for item in obj:
+            if isinstance(item, (dict, list)):
+                cambios += _aplicar_videos_faltantes_en_obj(item, pendientes)
+    return cambios
+
+
+def _aplicar_videos_catalogo_en_obj(obj, reemplazos: list[dict]) -> int:
+    cambios = 0
+    if isinstance(obj, dict):
+        if _es_ejercicio_dict(obj):
+            nombre = (obj.get("Ejercicio") or obj.get("ejercicio") or "").strip()
+            video_actual = (obj.get("Video") or obj.get("video") or "").strip()
+            nombre_norm = normalizar_texto(nombre)
+            video_norm = _normalizar_video_url(video_actual)
+            idx = next(
+                (
+                    i
+                    for i, item in enumerate(reemplazos)
+                    if item["nombre_norm"] == nombre_norm and item["video_actual_norm"] == video_norm
+                ),
+                None,
+            )
+            if idx is not None:
+                link = reemplazos.pop(idx)["video_catalogo"]
+                obj["Video"] = link
+                obj["video"] = link
+                cambios += 1
+            return cambios
+        for valor in obj.values():
+            if isinstance(valor, (dict, list)):
+                cambios += _aplicar_videos_catalogo_en_obj(valor, reemplazos)
+    elif isinstance(obj, list):
+        for item in obj:
+            if isinstance(item, (dict, list)):
+                cambios += _aplicar_videos_catalogo_en_obj(item, reemplazos)
+    return cambios
+
 # ===================== DEF. COLUMNAS UI =====================
 COLUMNAS_TABLA = [
     "Circuito",
@@ -326,7 +490,9 @@ def _ejercicio_firestore_a_fila_ui(ej: dict) -> dict:
     fila["RIR"] = ej.get("RIR") or ej.get("rir") or ""
     fila["Descanso"] = str(ej.get("Descanso") or ej.get("descanso") or "").split(" ")[0]
     fila["Tipo"] = ej.get("Tipo") or ej.get("tipo") or ""
-    fila["Video"] = ej.get("Video") or ej.get("video") or ""
+    video_raw = ej.get("Video") or ej.get("video") or ""
+    video_norm = _normalizar_video_url(video_raw)
+    fila["Video"] = video_norm or video_raw or ""
     fila["RirMin"] = fila["RirMin"] or fila["RIR"]
     fila["RirMax"] = fila["RirMax"] or fila["RIR"]
 
@@ -354,7 +520,8 @@ def _ejercicio_firestore_a_fila_ui(ej: dict) -> dict:
         fila[f"CondicionValor_{p}"] = ej.get(f"CondicionValor_{p}", "")
 
     if not fila["Video"]:
-        fila["Video"] = _video_de_catalogo(fila["Ejercicio"])
+        video_catalogo = _video_de_catalogo(fila["Ejercicio"])
+        fila["Video"] = video_catalogo or ""
     return fila
 
 
@@ -409,11 +576,7 @@ def _buscar_videos_faltantes(doc_data: dict, catalogo: dict[str, dict]) -> list[
         return []
     pendientes: list[tuple[str, str, str]] = []
     for dia, ejercicios in rutina_actual.items():
-        if not isinstance(ejercicios, list):
-            continue
-        for ejercicio in ejercicios:
-            if not isinstance(ejercicio, dict):
-                continue
+        for ejercicio in _iterar_ejercicios_en_obj(ejercicios):
             video_actual = (ejercicio.get("Video") or ejercicio.get("video") or "").strip()
             if video_actual:
                 continue
@@ -440,36 +603,19 @@ def _completar_videos_rutina(
     if not isinstance(rutina_actual, dict):
         return 0
 
-    agrupados: dict[str, list[tuple[str, str]]] = {}
+    agrupados: dict[str, list[dict]] = {}
     for dia, nombre, link in pendientes:
-        agrupados.setdefault(str(dia), []).append((nombre, link))
+        agrupados.setdefault(str(dia), []).append(
+            {"nombre": (nombre or "").strip(), "nombre_norm": normalizar_texto(nombre), "link": link}
+        )
 
-    rutina_nueva: dict[str, list] = {}
+    rutina_nueva = copy.deepcopy(rutina_actual)
     total = 0
-    for dia, ejercicios in rutina_actual.items():
-        if not isinstance(ejercicios, list):
-            rutina_nueva[dia] = ejercicios
+    for dia, lista in agrupados.items():
+        data_dia = _obtener_data_dia(rutina_nueva, dia)
+        if data_dia is None:
             continue
-        nuevas_filas = []
-        for ejercicio in ejercicios:
-            if not isinstance(ejercicio, dict):
-                nuevas_filas.append(ejercicio)
-                continue
-            video_actual = (ejercicio.get("Video") or ejercicio.get("video") or "").strip()
-            if video_actual:
-                nuevas_filas.append(ejercicio)
-                continue
-            nombre = (ejercicio.get("Ejercicio") or ejercicio.get("ejercicio") or "").strip()
-            candidatos = [link for nom, link in agrupados.get(str(dia), []) if nom == nombre]
-            if candidatos:
-                fila_actualizada = dict(ejercicio)
-                fila_actualizada["Video"] = candidatos[0]
-                fila_actualizada["video"] = candidatos[0]
-                nuevas_filas.append(fila_actualizada)
-                total += 1
-            else:
-                nuevas_filas.append(ejercicio)
-        rutina_nueva[dia] = nuevas_filas
+        total += _aplicar_videos_faltantes_en_obj(data_dia, lista)
 
     if not total:
         return 0
@@ -478,6 +624,88 @@ def _completar_videos_rutina(
         db.collection("rutinas_semanales").document(doc_id).update({"rutina": rutina_nueva})
     except Exception as exc:
         st.error(f"No pude actualizar los videos en Firestore: {exc}")
+        return 0
+    return total
+
+
+def _buscar_videos_inconsistentes(db, doc_data: dict) -> list[dict]:
+    rutina_actual = doc_data.get("rutina", {}) or {}
+    if not isinstance(rutina_actual, dict):
+        return []
+    correo_entrenador = (doc_data.get("entrenador") or "").strip().lower()
+    pendientes: list[dict] = []
+    for dia, ejercicios in rutina_actual.items():
+        for ejercicio in _iterar_ejercicios_en_obj(ejercicios):
+            nombre = (ejercicio.get("Ejercicio") or ejercicio.get("ejercicio") or "").strip()
+            video_actual = (ejercicio.get("Video") or ejercicio.get("video") or "").strip()
+            if not (nombre and video_actual):
+                continue
+            video_actual_norm = _normalizar_video_url(video_actual)
+            if not video_actual_norm:
+                continue
+            video_catalogo, doc_id_catalogo = _video_catalogo_para_nombre(db, nombre, correo_entrenador)
+            video_catalogo_norm = _normalizar_video_url(video_catalogo)
+            if not video_catalogo_norm or video_catalogo_norm == video_actual_norm:
+                continue
+            pendientes.append(
+                {
+                    "dia": str(dia),
+                    "ejercicio": nombre,
+                    "video_actual": video_actual,
+                    "video_catalogo": video_catalogo,
+                    "video_actual_norm": video_actual_norm,
+                    "video_catalogo_norm": video_catalogo_norm,
+                    "doc_id": doc_id_catalogo,
+                }
+            )
+    return pendientes
+
+
+def _reemplazar_videos_inconsistentes(
+    db,
+    doc_id: str,
+    doc_data: dict,
+    pendientes: list[dict],
+) -> int:
+    if not pendientes:
+        return 0
+    rutina_actual = doc_data.get("rutina", {}) or {}
+    if not isinstance(rutina_actual, dict):
+        return 0
+
+    agrupados: dict[str, list[dict]] = {}
+    for item in pendientes:
+        dia = str(item.get("dia") or "")
+        if not dia:
+            continue
+        reemplazos = agrupados.setdefault(dia, [])
+        reemplazos.append(
+            {
+                "nombre_norm": normalizar_texto(item.get("ejercicio")),
+                "video_catalogo": item.get("video_catalogo", ""),
+                "video_actual_norm": item.get("video_actual_norm")
+                or _normalizar_video_url(item.get("video_actual", "")),
+            }
+        )
+
+    if not agrupados:
+        return 0
+
+    rutina_nueva = copy.deepcopy(rutina_actual)
+    total = 0
+    for dia, lista in agrupados.items():
+        data_dia = _obtener_data_dia(rutina_nueva, dia)
+        if data_dia is None:
+            continue
+        total += _aplicar_videos_catalogo_en_obj(data_dia, lista)
+
+    if not total:
+        return 0
+
+    try:
+        db.collection("rutinas_semanales").document(doc_id).update({"rutina": rutina_nueva})
+    except Exception as exc:
+        st.error(f"No se pudo actualizar los videos en la rutina: {exc}")
         return 0
     return total
 
@@ -513,6 +741,7 @@ def _limpiar_estado_rutina():
             st.session_state.pop(key, None)
     for clave in ("dias_editables", "dias_originales", "_dia_creado_msg"):
         st.session_state.pop(clave, None)
+    st.session_state.pop(RUTINA_STATE_OWNER_KEY, None)
 
 
 def limpiar_estado_editar_rutinas():
@@ -539,6 +768,7 @@ def _cargar_rutina_en_session(rutina_dict: dict):
             (warm_up if fila_ui.get("Sección") == "Warm Up" else work_out).append(fila_ui)
         st.session_state[f"rutina_dia_{idx}_Warm_Up"] = warm_up
         st.session_state[f"rutina_dia_{idx}_Work_Out"] = work_out
+    st.session_state[RUTINA_STATE_OWNER_KEY] = "editar"
 
 
 def _construir_rutina_desde_session(dias_originales: list[str]) -> dict[str, list[dict]]:
@@ -1234,15 +1464,19 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                 fila.pop("_delete_marked", None)
                 st.session_state.pop(borrar_key, None)
 
-            if "Video" in pos:
+            video_col_idx = pos.get("Video")
+            if video_col_idx is not None:
                 nombre_ej = str(fila.get("Ejercicio", "")).strip()
                 video_url = str(fila.get("Video") or "").strip()
                 if not video_url and nombre_ej:
                     video_url = str(_video_de_catalogo(nombre_ej) or "").strip()
-                video_cols = cols[pos["Video"]].columns([1, 1, 1])
-                if video_url:
+                video_url_norm = _normalizar_video_url(video_url)
+                video_cols = cols[video_col_idx].columns([1, 1, 1])
+                if video_url_norm:
                     with video_cols[1].popover("▶️", use_container_width=False):
-                        st.video(video_url)
+                        st.video(video_url_norm)
+                elif video_url:
+                    video_cols[1].markdown(f"[Ver video]({video_url})")
                 else:
                     video_cols[1].markdown("")
 
@@ -1426,6 +1660,48 @@ def editar_rutinas():
                 st.info("Todos los ejercicios de la rutina ya tienen video o no hay sugerencias disponibles.")
         else:
             st.caption("Usa el botón para detectar ejercicios sin video y sugerir enlaces desde la colección.")
+
+    with st.expander("🔁 Verificar videos distintos al catálogo"):
+        if st.button("Buscar videos distintos", key="btn_buscar_videos_diff"):
+            inconsistentes = _buscar_videos_inconsistentes(db, doc_data)
+            st.session_state["_videos_diff_lista"] = inconsistentes
+            st.session_state["_videos_diff_checked"] = True
+
+        inconsistentes: list[dict] = st.session_state.get("_videos_diff_lista", [])
+        revisado_diff = st.session_state.get("_videos_diff_checked", False)
+
+        if revisado_diff:
+            if inconsistentes:
+                df_diff = pd.DataFrame(
+                    [
+                        {
+                            "Día": item["dia"],
+                            "Ejercicio": item["ejercicio"],
+                            "Video en rutina": item["video_actual"],
+                            "Video catálogo": item["video_catalogo"],
+                            "Doc catálogo": item.get("doc_id", ""),
+                        }
+                        for item in inconsistentes
+                    ]
+                )
+                st.dataframe(df_diff, use_container_width=True, hide_index=True)
+                if st.button("Reemplazar por video del catálogo", type="primary", key="btn_aplicar_videos_diff"):
+                    aplicados = _reemplazar_videos_inconsistentes(db, doc_id_semana, doc_data, inconsistentes)
+                    if aplicados:
+                        st.success(f"Se actualizaron {aplicados} ejercicio(s) con el video del catálogo.")
+                        st.session_state.pop("_videos_diff_lista", None)
+                        st.session_state.pop("_videos_diff_checked", None)
+                        st.session_state["_editar_rutina_actual"] = None
+                        datos_cache[doc_id_semana] = (
+                            db.collection("rutinas_semanales").document(doc_id_semana).get().to_dict() or {}
+                        )
+                        _trigger_rerun()
+                    else:
+                        st.info("No se realizaron cambios. Verifica que los videos sigan siendo distintos.")
+            else:
+                st.info("No se detectaron diferencias entre la rutina y el catálogo.")
+        else:
+            st.caption("Compara los videos guardados en la semana con los del catálogo de ejercicios.")
 
     estado_actual = st.session_state.get("_editar_rutina_actual")
     clave_actual = f"{correo_cliente}__{doc_id_semana}"

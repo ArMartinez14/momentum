@@ -17,6 +17,7 @@ from app_core.utils import (
     usuario_activo,
 )
 from app_core.firebase_client import get_db
+from app_core.video_utils import normalizar_link_youtube
 from servicio_catalogos import get_catalogos, add_item
 
 # =============== 🔐 FIREBASE ===============
@@ -1099,16 +1100,20 @@ def _render_tabla_manual(
         if mostrar_copia:
             filas_para_copiar.append((idx, dict(fila)))
 
-        if "Video" in pos:
+        video_col_idx = pos.get("Video")
+        if video_col_idx is not None:
             nombre_ej = str(fila.get("Ejercicio", "")).strip()
             video_url = str(fila.get("Video") or "").strip()
             if not video_url and nombre_ej:
                 meta_video = ejercicios_dict.get(nombre_ej, {}) or {}
                 video_url = str(meta_video.get("video") or meta_video.get("Video") or "").strip()
-            video_cols = cols[pos["Video"]].columns([1, 1, 1])
-            if video_url:
+            video_cols = cols[video_col_idx].columns([1, 1, 1])
+            video_url_norm = normalizar_link_youtube(video_url)
+            if video_url_norm:
                 with video_cols[1].popover("▶️", use_container_width=False):
-                    st.video(video_url)
+                    st.video(video_url_norm)
+            elif video_url:
+                video_cols[1].markdown(f"[Ver video]({video_url})")
             else:
                 video_cols[1].markdown("")
 

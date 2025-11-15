@@ -11,6 +11,7 @@ import time
 from app_core.firebase_client import get_db
 from app_core.theme import inject_theme
 from app_core.utils import empresa_de_usuario, EMPRESA_MOTION, EMPRESA_ASESORIA, EMPRESA_DESCONOCIDA
+from app_core.video_utils import normalizar_link_youtube
 
 
 def _current_query_params() -> dict[str, str]:
@@ -1479,6 +1480,7 @@ def ver_rutinas():
                             st.session_state.pop("dia_sel", None)
                             _sync_rutinas_query_params(cliente_nombre)
                             st.rerun()
+            st.stop()
         else:
             if rol in ("entrenador", "admin", "administrador"):
                 cliente_activo = clientes_estado_por_nombre.get(cliente_sel, True)
@@ -1822,16 +1824,13 @@ def ver_rutinas():
 
             # 🔹 Video embebido centrado
             if video_url and st.session_state.get(mostrar_video_key, False):
-                url = video_url
-                if "youtube.com/shorts/" in url:
-                    try:
-                        video_id = url.split("shorts/")[1].split("?")[0]
-                        url = f"https://www.youtube.com/watch?v={video_id}"
-                    except:
-                        pass
+                video_url_norm = normalizar_link_youtube(video_url)
                 _, vcol, _ = st.columns([1, 2, 1])
                 with vcol:
-                    st.video(url)
+                    if video_url_norm:
+                        st.video(video_url_norm)
+                    else:
+                        st.markdown(f"[Ver video]({video_url})")
 
             st.markdown("</div>", unsafe_allow_html=True)  # cierre exercise-block ✅
 
