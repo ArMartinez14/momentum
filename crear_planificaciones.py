@@ -4,6 +4,7 @@ import unicodedata
 from datetime import date, timedelta, datetime, timezone
 import pandas as pd
 import uuid
+from urllib.parse import parse_qs, urlencode, urlparse
 # Catálogos para caracteristica / patrón / grupo
 from servicio_catalogos import get_catalogos, add_item
 from firebase_admin import firestore
@@ -44,6 +45,7 @@ LIGHT = dict(
 )
 
 
+from app_core.cache import cache_data, clear_cache
 from app_core.firebase_client import get_db
 from app_core.theme import inject_theme
 from app_core.utils import (
@@ -236,6 +238,76 @@ def _resolver_id_implemento(marca: str, maquina: str) -> str:
 
 _VIDEO_URL_REGEX = _re_mod.compile(r"(https?://[^\s]+)", _re_mod.IGNORECASE)
 
+_YOUTUBE_ALLOWED_HOSTS = {
+    "youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtu.be",
+    "youtube-nocookie.com",
+    "www.youtube.com",
+    "www.youtu.be",
+    "www.youtube-nocookie.com",
+}
+
+
+def _normalizar_link_youtube(url: str) -> str:
+    """Devuelve un link https://www.youtube.com/watch?v=ID normalizado o ''."""
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+
+    if not raw.lower().startswith(("http://", "https://")):
+        raw = f"https://{raw}"
+
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return ""
+
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+
+    if host not in _YOUTUBE_ALLOWED_HOSTS:
+        return ""
+
+    path = (parsed.path or "").strip()
+    video_id = ""
+
+    if host.endswith("youtu.be"):
+        video_id = path.lstrip("/").split("/")[0]
+    elif "/shorts/" in path:
+        video_id = path.split("/shorts/", 1)[1].split("/", 1)[0]
+    elif path.startswith("/embed/"):
+        video_id = path.split("/embed/", 1)[1].split("/", 1)[0]
+    else:
+        qs = parse_qs(parsed.query or "")
+        if qs.get("v"):
+            video_id = qs["v"][0]
+        else:
+            segments = [seg for seg in path.split("/") if seg]
+            if segments and segments[0] == "watch" and len(segments) > 1:
+                video_id = segments[1]
+
+    video_id = video_id.strip()
+    if not video_id:
+        return ""
+
+    video_id = _re_mod.sub(r"[^0-9A-Za-z_-]", "", video_id)
+    if not video_id:
+        return ""
+
+    qs_values = parse_qs(parsed.query or "")
+    extra_params = {}
+    for key in ("t", "start"):
+        if key in qs_values and qs_values[key]:
+            extra_params[key] = qs_values[key][-1]
+
+    query = {"v": video_id}
+    query.update(extra_params)
+    query_str = urlencode(query)
+    return f"https://www.youtube.com/watch?{query_str}"
+
 def _extraer_video_desde_detalle(texto: str) -> str:
     """Devuelve el primer link http(s) encontrado en el detalle."""
     s = str(texto or "").strip()
@@ -245,7 +317,7 @@ def _extraer_video_desde_detalle(texto: str) -> str:
     if not match:
         return ""
     url = match.group(1).rstrip(").,;]")
-    return url.strip()
+    return _normalizar_link_youtube(url)
 
 def _marcadores_videos_guardados() -> set[str]:
     raw = st.session_state.get("_videos_guardados_ejercicios", [])
@@ -263,7 +335,7 @@ def _marcar_video_guardado(nombre: str, url: str) -> None:
 
 def _guardar_video_en_ejercicio_si_falta(nombre_ejercicio: str, video_url: str, ejercicios_dict: dict[str, dict]) -> None:
     nombre_ejercicio = (nombre_ejercicio or "").strip()
-    video_url = (video_url or "").strip()
+    video_url = _normalizar_link_youtube(video_url)
     if not (nombre_ejercicio and video_url):
         return
 
@@ -336,6 +408,14 @@ def guardar_ejercicio_firestore(nombre_final: str, payload_base: dict) -> None:
     if _correo:
         empresa_propietaria = empresa_de_usuario(_correo)
 
+    video_normalizado = _normalizar_link_youtube(payload_base.get("video", ""))
+    if video_normalizado:
+        payload_base["video"] = video_normalizado
+        payload_base["Video"] = video_normalizado
+    else:
+        payload_base["video"] = ""
+        payload_base["Video"] = ""
+
     meta = {
         "nombre": nombre_final,
         "video": payload_base.get("video", ""),
@@ -360,7 +440,7 @@ def guardar_ejercicio_firestore(nombre_final: str, payload_base: dict) -> None:
     doc_id = slug_nombre(nombre_final) if _es_admin else f"{slug_nombre(nombre_final)}__{_correo or 'sin_correo'}"
     db.collection("ejercicios").document(doc_id).set(meta, merge=True)
 
-@st.cache_data(show_spinner=False)
+@cache_data("ejercicios", show_spinner=False)
 def _cargar_ejercicios_cached(correo_usuario: str, rol: str):
     db = get_db()
     correo_usuario = (correo_usuario or "").strip().lower()
@@ -380,6 +460,14 @@ def _cargar_ejercicios_cached(correo_usuario: str, rol: str):
             enriched["video"] = enriched.get("Video", "")
         if "Video" not in enriched and "video" in enriched:
             enriched["Video"] = enriched.get("video", "")
+
+        video_normalizado = _normalizar_link_youtube(enriched.get("video", ""))
+        if video_normalizado:
+            enriched["video"] = video_normalizado
+            enriched["Video"] = video_normalizado
+        else:
+            enriched["video"] = ""
+            enriched["Video"] = ""
         target[nombre] = enriched
 
     ejercicios_por_nombre: dict[str, dict] = {}
@@ -463,13 +551,13 @@ def cargar_ejercicios():
     rol = (st.session_state.get("rol") or "").strip()
     return _cargar_ejercicios_cached(correo_usuario, rol)
 
-@st.cache_data(show_spinner=False)
+@cache_data("usuarios", show_spinner=False)
 def cargar_usuarios():
     db = get_db()
     docs = db.collection("usuarios").stream()
     return [doc.to_dict() for doc in docs if doc.exists]
 
-@st.cache_data(show_spinner=False)
+@cache_data("implementos", show_spinner=False)
 def cargar_implementos():
     db = get_db()
     impl = {}
@@ -478,8 +566,6 @@ def cargar_implementos():
         d["pesos"] = d.get("pesos", [])
         impl[str(doc.id)] = d
     return impl
-
-IMPLEMENTOS = cargar_implementos()
 
 DESCANSO_OPCIONES = ["", "1", "2", "3", "4", "5"]
 
@@ -910,6 +996,7 @@ def crear_rutinas():
     st.markdown("<div class='card'>", unsafe_allow_html=True)
 
     ejercicios_dict = cargar_ejercicios()
+    implementos = cargar_implementos()
     usuarios = cargar_usuarios()
 
     correo_login = (st.session_state.get("correo") or "").strip().lower()
@@ -1185,10 +1272,20 @@ def crear_rutinas():
     st.caption("Selecciona un día para editar sus secciones sin recargar toda la página.")
 
     BASE_HEADERS = [
-    "Circuito", "Buscar Ejercicio", "Ejercicio", "Detalle",
-    "Series", "Repeticiones", "Peso", "RIR (Min/Max)", "Progresión", "Copiar", "Video?", "Borrar"
+        "Circuito",
+        "Buscar Ejercicio",
+        "Ejercicio",
+        "Detalle",
+        "Series",
+        "Repeticiones",
+        "Peso",
+        "RIR (Min/Max)",
+        "Progresión",
+        "Copiar",
+        "Borrar",
+        "Video",
     ]
-    BASE_SIZES = [1, 2.5, 2.5, 2.0, 0.7, 1.4, 1.0, 1.4, 1.0, 0.6, 0.6, 0.6]  
+    BASE_SIZES = [1.0, 2.5, 2.5, 2.0, 0.7, 1.4, 1.0, 1.4, 1.0, 0.6, 0.6, 0.7]  
     # 👆 aquí puse 1.6 en RIR para que quepan dos casillas
 
     columnas_tabla = [
@@ -1369,8 +1466,7 @@ def crear_rutinas():
                                             tipo = "otros_catalogos"
                                         add_item(tipo, valor_limpio)
                                         st.success(f"Agregado: {valor_limpio}")
-                                        st.cache_data.clear()
-                                        st.rerun()
+                                        clear_cache("catalogos")
                             st.markdown("</div>", unsafe_allow_html=True)
                             return ""
                         elif sel == "— Selecciona —":
@@ -1411,11 +1507,12 @@ def crear_rutinas():
                         grupo_s        = _combo_con_agregar("Grupo Muscular Secundario", catalogo_grupo_s, key_base=f"grupoS_top_{i}_{seccion}")
 
                     # Link de video (opcional) — NUEVO
-                    video_url = st.text_input(
+                    video_url_input = st.text_input(
                         "URL del video (opcional):",
                         key=f"video_top_{key_seccion}",
                         placeholder="https://youtu.be/…"
                     )
+                    video_url = _normalizar_link_youtube(video_url_input)
 
                     # Preview de implemento/pesos si hay Marca + Máquina
                     id_impl_preview = ""
@@ -1475,7 +1572,7 @@ def crear_rutinas():
                                         "grupo_muscular_principal":  grupo_p,
                                         "grupo_muscular_secundario": grupo_s or "",
                                         "id_implemento": id_impl_final,
-                                        "video": (video_url or "").strip(),          # ← guarda el link de video
+                                        "video": video_url,          # ← guarda el link de video
                                         "publico_flag": bool(publico_check),
                                     }
                                     try:
@@ -1494,13 +1591,12 @@ def crear_rutinas():
                                             "grupo_muscular_secundario": grupo_s or "",
                                             "id_implemento": id_impl_final if id_impl_final else "",
                                             "publico": bool(publico_check),
-                                            "video": (video_url or "").strip(),
-                                            "Video": (video_url or "").strip(),
+                                            "video": video_url,
+                                            "Video": video_url,
                                             "_doc_id": doc_id_local,
                                         }
                                         st.success(f"✅ Ejercicio '{nombre_final}' guardado correctamente")
-                                        st.cache_data.clear()
-                                        st.rerun()
+                                        clear_cache("ejercicios")
                                     except Exception as e:
                                         st.error(f"❌ Error al guardar: {e}")
             else:
@@ -1543,7 +1639,11 @@ def crear_rutinas():
 
                 header_cols = st.columns(sizes)
                 for c, title in zip(header_cols, headers):
-                    c.markdown(f"<div class='header-center'>{title}</div>", unsafe_allow_html=True)
+                    if title == "Video":
+                        inner = c.columns([1, 1, 1])
+                        inner[1].markdown("<div class='header-center'>Video</div>", unsafe_allow_html=True)
+                    else:
+                        c.markdown(f"<div class='header-center'>{title}</div>", unsafe_allow_html=True)
 
                 filas_marcadas_para_borrar: list[tuple[int, str]] = []
                 filas_para_copiar: list[tuple[int, dict]]
@@ -1676,8 +1776,8 @@ def crear_rutinas():
                         nombre_ej = fila.get("Ejercicio","")
                         ej_doc = ejercicios_dict.get(nombre_ej, {}) or {}
                         id_impl = str(ej_doc.get("id_implemento","") or "")
-                        if id_impl and id_impl != "1" and id_impl in IMPLEMENTOS:
-                            pesos_disponibles = IMPLEMENTOS[id_impl].get("pesos", []) or []
+                        if id_impl and id_impl != "1" and id_impl in implementos:
+                            pesos_disponibles = implementos[id_impl].get("pesos", []) or []
                             usar_text_input = not bool(pesos_disponibles)
                     except Exception:
                         usar_text_input = True
@@ -1765,16 +1865,18 @@ def crear_rutinas():
                     else:
                         fila.pop("_delete_marked", None)
 
-                    if "Video?" in pos:
+                    if "Video" in pos:
                         nombre_ej = str(fila.get("Ejercicio", "")).strip()
-                        has_video = bool((fila.get("Video") or "").strip()) or tiene_video(nombre_ej, ejercicios_dict)
-                        video_cols = cols[pos["Video?"]].columns([1, 1, 1])
-                        video_cols[1].checkbox(
-                            "",
-                            value=has_video,
-                            key=f"video_flag_{i}_{seccion}_{idx}",
-                            disabled=True
-                        )
+                        video_url = str(fila.get("Video") or "").strip()
+                        if not video_url and nombre_ej:
+                            meta_video = ejercicios_dict.get(nombre_ej, {}) or {}
+                            video_url = str(meta_video.get("video") or meta_video.get("Video") or "").strip()
+                        video_cols = cols[pos["Video"]].columns([1, 1, 1])
+                        if video_url:
+                            with video_cols[1].popover("▶️", use_container_width=False):
+                                st.video(video_url)
+                        else:
+                            video_cols[1].markdown("")
 
                     if mostrar_progresion:
                         st.markdown(SECTION_BREAK_HTML, unsafe_allow_html=True)
@@ -1867,7 +1969,6 @@ def crear_rutinas():
                         _reset_fila(key_seccion, idx_sel, seccion, key_sel)
                     st.session_state.pop(pending_key, None)
                     st.success("Fila(s) limpiadas ✅")
-                    st.rerun()
                 elif st.session_state.get(pending_key):
                     fila_vacia = {k: "" for k in columnas_tabla}
                     fila_vacia["Sección"] = seccion
@@ -1883,7 +1984,6 @@ def crear_rutinas():
                     _limpiar_destinos_copy_state(key_seccion)
                     st.session_state.pop(pending_key, None)
                     st.success("Sección limpiada ✅")
-                    st.rerun()
                 else:
                     st.session_state[pending_key] = True
 
@@ -2283,7 +2383,7 @@ def crear_rutinas():
                 st.error(f"❌ {mensaje}")
             if actualizados and not errores:
                 st.success(f"✅ Se actualizaron {actualizados} ejercicio(s).")
-                st.cache_data.clear()
+                clear_cache("ejercicios")
                 _trigger_rerun()
     
     if ejercicios_sin_catalogo:

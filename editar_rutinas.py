@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import re
 import unicodedata
+from collections import defaultdict
 from datetime import datetime
 import pandas as pd
 import streamlit as st
@@ -260,11 +262,11 @@ BASE_HEADERS = [
     "RIR (Min/Max)",
     "Progresión",
     "Copiar",
-    "Video?",
     "Borrar",
+    "Video",
 ]
 
-BASE_SIZES = [0.9, 2.4, 2.8, 2.0, 0.8, 1.4, 1.0, 1.3, 1.0, 0.6, 0.6, 0.6]
+BASE_SIZES = [0.9, 2.4, 2.8, 2.0, 0.8, 1.4, 1.0, 1.3, 1.0, 0.6, 0.6, 0.9]
 
 PROGRESION_VAR_OPTIONS = ["", "peso", "velocidad", "tiempo", "descanso", "rir", "series", "repeticiones"]
 PROGRESION_OP_OPTIONS = ["", "multiplicacion", "division", "suma", "resta"]
@@ -502,7 +504,6 @@ def _limpiar_estado_rutina():
         "rirmax_",
         "prog_check_",
         "copy_check_",
-        "video_flag_",
         "delete_",
         "do_copy_",
         "multiselect_",
@@ -552,6 +553,69 @@ def _construir_rutina_desde_session(dias_originales: list[str]) -> dict[str, lis
     return resultado
 
 
+REPORTE_FIELDS = (
+    "series_data",
+    "peso_alcanzado",
+    "reps_alcanzadas",
+    "rir_alcanzado",
+    "comentario",
+    "coach_responsable",
+)
+
+
+def _clave_ejercicio_para_reporte(ejercicio: dict) -> tuple[str, str, str]:
+    bloque = (ejercicio.get("bloque") or ejercicio.get("Sección") or ejercicio.get("seccion") or "").strip().lower()
+    circuito = (ejercicio.get("circuito") or ejercicio.get("Circuito") or "").strip().upper()
+    nombre = (ejercicio.get("ejercicio") or ejercicio.get("Ejercicio") or "").strip().lower()
+    return bloque, circuito, nombre
+
+
+def _series_data_con_datos(series_data) -> bool:
+    if not isinstance(series_data, list):
+        return False
+    for serie in series_data:
+        if not isinstance(serie, dict):
+            continue
+        if any(str(val).strip() for val in serie.values()):
+            return True
+    return False
+
+
+def _copiar_datos_reporte(origen: dict, destino: dict) -> None:
+    if not isinstance(origen, dict) or not isinstance(destino, dict):
+        return
+    series_prev = origen.get("series_data")
+    if _series_data_con_datos(series_prev):
+        destino["series_data"] = copy.deepcopy(series_prev)
+    for campo in REPORTE_FIELDS[1:]:
+        valor = origen.get(campo)
+        if valor not in (None, "", []):
+            destino[campo] = copy.deepcopy(valor)
+
+
+def _fusionar_con_reportes_existentes(ejercicios_originales, ejercicios_nuevos: list[dict]) -> list[dict]:
+    lista_original = obtener_lista_ejercicios(ejercicios_originales)
+    if not lista_original:
+        return ejercicios_nuevos
+
+    indice = defaultdict(list)
+    for ex in lista_original:
+        if isinstance(ex, dict):
+            indice[_clave_ejercicio_para_reporte(ex)].append(ex)
+
+    fusionados: list[dict] = []
+    for ex in ejercicios_nuevos:
+        nuevo = dict(ex) if isinstance(ex, dict) else ex
+        if isinstance(nuevo, dict):
+            clave = _clave_ejercicio_para_reporte(nuevo)
+            candidatos = indice.get(clave) or []
+            if candidatos:
+                previo = candidatos.pop(0)
+                _copiar_datos_reporte(previo, nuevo)
+        fusionados.append(nuevo)
+    return fusionados
+
+
 def _guardar_cambios_en_documentos(
     db,
     doc_ids: list[str],
@@ -566,7 +630,12 @@ def _guardar_cambios_en_documentos(
         rutina_actual = data.get("rutina", {}) or {}
         nueva_rutina = dict(rutina_actual)
         for dia in dias_originales:
-            nueva_rutina[str(dia)] = rutina_actualizada.get(str(dia), [])
+            dia_clave = str(dia)
+            ejercicios_nuevos = rutina_actualizada.get(dia_clave, [])
+            if not isinstance(ejercicios_nuevos, list):
+                ejercicios_nuevos = []
+            ejercicios_previos = rutina_actual.get(dia_clave, [])
+            nueva_rutina[dia_clave] = _fusionar_con_reportes_existentes(ejercicios_previos, ejercicios_nuevos)
         try:
             ref.update({"rutina": nueva_rutina})
             total += 1
@@ -911,7 +980,17 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
         header_cols = st.columns(sizes)
         for c, title in zip(header_cols, headers):
             slug = _header_slug(title)
-            c.markdown(f"<div class='header-center header-center--{slug}'>{title}</div>", unsafe_allow_html=True)
+            if title == "Video":
+                inner = c.columns([1, 1, 1])
+                inner[1].markdown(
+                    f"<div class='header-center header-center--{slug}'>Video</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                c.markdown(
+                    f"<div class='header-center header-center--{slug}'>{title}</div>",
+                    unsafe_allow_html=True,
+                )
 
         filas_marcadas: list[tuple[int, str]] = []
         filas_para_copiar: list[tuple[int, dict]] = []
@@ -1145,12 +1224,6 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
             if mostrar_copia:
                 filas_para_copiar.append((idx, dict(fila)))
 
-            if "Video?" in pos:
-                nombre_ej = str(fila.get("Ejercicio", "")).strip()
-                has_video = bool((fila.get("Video") or "").strip() or _video_de_catalogo(nombre_ej))
-                video_cols = cols[pos["Video?"]].columns([1, 1, 1])
-                video_cols[1].checkbox("", value=has_video, disabled=True, key=f"video_flag_{i}_{seccion}_{idx}")
-
             borrar_key = f"delete_{key_entrenamiento}"
             borrar_cols = cols[pos["Borrar"]].columns([1, 1, 1])
             marcado_borrar = borrar_cols[1].checkbox("", key=borrar_key)
@@ -1160,6 +1233,18 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
             else:
                 fila.pop("_delete_marked", None)
                 st.session_state.pop(borrar_key, None)
+
+            if "Video" in pos:
+                nombre_ej = str(fila.get("Ejercicio", "")).strip()
+                video_url = str(fila.get("Video") or "").strip()
+                if not video_url and nombre_ej:
+                    video_url = str(_video_de_catalogo(nombre_ej) or "").strip()
+                video_cols = cols[pos["Video"]].columns([1, 1, 1])
+                if video_url:
+                    with video_cols[1].popover("▶️", use_container_width=False):
+                        st.video(video_url)
+                else:
+                    video_cols[1].markdown("")
 
         total_dias = len(dias_labels)
         if filas_para_copiar and total_dias > 1:

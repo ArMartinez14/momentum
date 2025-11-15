@@ -122,9 +122,18 @@ COLUMNAS_TABLA = [
 ]
 
 BASE_HEADERS = [
-    "Circuito", "Buscar Ejercicio", "Ejercicio", "Detalle",
-    "Series", "Repeticiones", "Peso", "RIR (Min/Max)",
-    "Progresión", "Copiar", "Video?", "Borrar"
+    "Circuito",
+    "Buscar Ejercicio",
+    "Ejercicio",
+    "Detalle",
+    "Series",
+    "Repeticiones",
+    "Peso",
+    "RIR (Min/Max)",
+    "Progresión",
+    "Copiar",
+    "Video",
+    "Borrar",
 ]
 
 BASE_SIZES = [1.0, 2.5, 2.5, 2.0, 0.7, 1.4, 1.0, 1.4, 1.0, 0.6, 0.6, 0.6]
@@ -828,7 +837,11 @@ def _render_tabla_manual(
     st.caption("Los cambios se guardan automáticamente.")
     header_cols = st.columns(sizes)
     for c, title in zip(header_cols, headers):
-        c.markdown(f"<div class='header-center'>{title}</div>", unsafe_allow_html=True)
+        if title == "Video":
+            inner = c.columns([1, 1, 1])
+            inner[1].markdown("<div class='header-center'>Video</div>", unsafe_allow_html=True)
+        else:
+            c.markdown(f"<div class='header-center'>{title}</div>", unsafe_allow_html=True)
 
     filas_marcadas: list[tuple[int, str]] = []
     filas_para_copiar: list[tuple[int, dict]] = []
@@ -1086,16 +1099,18 @@ def _render_tabla_manual(
         if mostrar_copia:
             filas_para_copiar.append((idx, dict(fila)))
 
-        if "Video?" in pos:
+        if "Video" in pos:
             nombre_ej = str(fila.get("Ejercicio", "")).strip()
-            has_video = bool((fila.get("Video") or "").strip()) or tiene_video(nombre_ej, ejercicios_dict)
-            video_cols = cols[pos["Video?"]].columns([1, 1, 1])
-            video_cols[1].checkbox(
-                "",
-                value=has_video,
-                key=f"video_flag_descarga_{dia_sel}_{bloque_sel}_{idx}",
-                disabled=True,
-            )
+            video_url = str(fila.get("Video") or "").strip()
+            if not video_url and nombre_ej:
+                meta_video = ejercicios_dict.get(nombre_ej, {}) or {}
+                video_url = str(meta_video.get("video") or meta_video.get("Video") or "").strip()
+            video_cols = cols[pos["Video"]].columns([1, 1, 1])
+            if video_url:
+                with video_cols[1].popover("▶️", use_container_width=False):
+                    st.video(video_url)
+            else:
+                video_cols[1].markdown("")
 
         borrar_key = f"delete_{key_ent}"
         borrar_cols = cols[pos["Borrar"]].columns([1, 1, 1])

@@ -42,8 +42,21 @@ DEFAULTS = {
     ],
 }
 
-# --- Decorador de caché: usa st.cache_data si hay Streamlit, si no, sin caché ---
+if _USE_ST:
+    try:
+        from app_core.cache import cache_data as _cache_data_helper, clear_cache as _clear_cache_helper
+    except Exception:
+        _cache_data_helper = None
+        _clear_cache_helper = None
+else:
+    _cache_data_helper = None
+    _clear_cache_helper = None
+
+
+# --- Decorador de caché: usa helper si hay Streamlit, si no, sin caché ---
 def _cache(fn):
+    if _USE_ST and _cache_data_helper:
+        return _cache_data_helper("catalogos", show_spinner=False)(fn)
     if _USE_ST:
         return st.cache_data(show_spinner=False)(fn)
     return fn
@@ -75,8 +88,8 @@ def add_item(tipo: str, valor: str):
     db = _init_db()
     ref = db.collection(COLL).document(DOC)
     ref.update({tipo: firestore.ArrayUnion([valor])})
-    if _USE_ST:
-        st.cache_data.clear()
+    if _USE_ST and _clear_cache_helper:
+        _clear_cache_helper("catalogos")
 
 def remove_item(tipo: str, valor: str):
     valor = (valor or "").strip()
@@ -85,8 +98,8 @@ def remove_item(tipo: str, valor: str):
     db = _init_db()
     ref = db.collection(COLL).document(DOC)
     ref.update({tipo: firestore.ArrayRemove([valor])})
-    if _USE_ST:
-        st.cache_data.clear()
+    if _USE_ST and _clear_cache_helper:
+        _clear_cache_helper("catalogos")
 
 # Utilidad para reemplazar todo el documento (solo si quieres forzar nuevos defaults)
 def set_catalogos(new_data: dict, overwrite: bool = True):
@@ -96,5 +109,5 @@ def set_catalogos(new_data: dict, overwrite: bool = True):
         ref.set(new_data)
     else:
         ref.set(new_data, merge=True)
-    if _USE_ST:
-        st.cache_data.clear()
+    if _USE_ST and _clear_cache_helper:
+        _clear_cache_helper("catalogos")
