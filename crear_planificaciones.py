@@ -102,6 +102,9 @@ div[data-testid="stCheckbox"] > label {
 div[data-testid="stCheckbox"] > label p {
   margin: 0 !important;
 }
+div[data-testid="stToggle"] label p {
+  white-space: nowrap;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -539,13 +542,62 @@ def _ensure_len(lista: list[dict], n: int, plantilla: dict):
     while len(lista) < n: lista.append({k: "" for k in plantilla})
     while len(lista) > n: lista.pop()
     return lista
+
+
+def _parse_series_count(valor) -> int:
+    """Intenta extraer un entero positivo a partir del campo Series."""
+    if isinstance(valor, (int, float)):
+        return max(0, int(valor))
+    s = str(valor or "").strip()
+    if not s:
+        return 0
+    match = _re_mod.search(r"\d+", s)
+    if not match:
+        return 0
+    try:
+        return max(0, int(match.group()))
+    except Exception:
+        return 0
+
+
+def _ensure_topset_len(data: list[dict] | None, length: int) -> list[dict]:
+    """Normaliza la cantidad de filas de Set Mode (Top Set)."""
+    plantilla = {"Series": "", "RepsMin": "", "RepsMax": "", "Peso": "", "RirMin": "", "RirMax": ""}
+    data = list(data or [])
+    if length < 0:
+        length = 0
+    while len(data) < length:
+        data.append(dict(plantilla))
+    while len(data) > length:
+        data.pop()
+    return data
+
+
+def _normalizar_topset_data(raw) -> list[dict]:
+    """Convierte distintos formatos a la lista estándar de Set Mode para la UI."""
+    campos = ("Series", "RepsMin", "RepsMax", "Peso", "RirMin", "RirMax")
+    resultado: list[dict] = []
+    if isinstance(raw, dict):
+        iterable = raw.values()
+    elif isinstance(raw, (list, tuple)):
+        iterable = raw
+    else:
+        iterable = []
+
+    for item in iterable:
+        if not isinstance(item, dict):
+            continue
+        limpio = {campo: str(item.get(campo, "") or item.get(campo.lower(), "")).strip() for campo in campos}
+        if any(limpio.values()):
+            resultado.append(limpio)
+    return resultado
 # === Helpers para cargar una rutina como base (no alteran guardado) ===
 def _ejercicio_firestore_a_fila_ui_min(ej: dict) -> dict:
     """Mapea un ejercicio guardado en Firestore -> fila UI de crear_rutinas."""
     fila = {
         "Sección": "", "Circuito": "", "Ejercicio": "", "Detalle": "",
         "Series": "", "RepsMin": "", "RepsMax": "", "Peso": "", "RIR": "",
-        "Tiempo": "", "Velocidad": "", "Descanso": "", "Tipo": "", "Video": "",
+        "Tiempo": "", "Descanso": "", "Tipo": "", "Video": "",
         # Campos que ya usa tu UI internamente
         "BuscarEjercicio": "",
         "Variable_1": "", "Cantidad_1": "", "Operacion_1": "", "Semanas_1": "",
@@ -568,7 +620,6 @@ def _ejercicio_firestore_a_fila_ui_min(ej: dict) -> dict:
     fila["RirMin"] = ej.get("RirMin","") or ej.get("rir_min","") or ""
     fila["RirMax"] = ej.get("RirMax","") or ej.get("rir_max","") or ""
     fila["Tiempo"]    = ej.get("Tiempo")    or ej.get("tiempo")    or ""
-    fila["Velocidad"] = ej.get("Velocidad") or ej.get("velocidad") or ""
     fila["Tipo"]      = ej.get("Tipo")      or ej.get("tipo")      or ""
     fila["Video"]     = ej.get("Video")     or ej.get("video")     or ""
 
@@ -609,6 +660,8 @@ def _ejercicio_firestore_a_fila_ui_min(ej: dict) -> dict:
         fila["BuscarEjercicio"] = fila["Ejercicio"]
         fila["_exact_on_load"] = True  # ← forzar match exacto sólo al cargar
 
+    top_sets_raw = ej.get("TopSetData") or ej.get("top_sets") or ej.get("TopSets")
+    fila["TopSetData"] = _normalizar_topset_data(top_sets_raw)
 
     return fila
 
@@ -739,7 +792,6 @@ def _sincronizar_filas_formulario(dias_labels: list[str]):
                     ("rmax", "RepsMax"),
                     ("peso", "Peso"),
                     ("tiempo", "Tiempo"),
-                    ("vel", "Velocidad"),
                     ("desc", "Descanso"),
                     ("rirmin", "RirMin"),
                     ("rirmax", "RirMax"),
@@ -796,6 +848,20 @@ def _default_cardio_data() -> dict:
     }
 
 
+_CARDIO_WIDGET_FIELDS = (
+    "tipo",
+    "modalidad",
+    "indicaciones",
+    "series",
+    "intervalos",
+    "tiempo_trabajo",
+    "intensidad_trabajo",
+    "tiempo_descanso",
+    "tipo_descanso",
+    "intensidad_descanso",
+)
+
+
 def _normalizar_cardio_data(cardio: dict | None) -> dict:
     """Normaliza la estructura de cardio antes de persistirla."""
     data = _default_cardio_data()
@@ -842,6 +908,31 @@ def _set_cardio_en_session(dia_idx: int, cardio_data: dict | None) -> None:
     for campo, valor in normalizado.items():
         widget_key = f"{cardio_key}_{campo}"
         st.session_state[widget_key] = valor
+
+
+def _sync_cardio_state_from_widgets(dia_idx: int) -> dict:
+    """Replica los valores escritos en los widgets hacia el estado principal de cardio."""
+    cardio_key = f"rutina_dia_{dia_idx}_Cardio"
+    base = _normalizar_cardio_data(st.session_state.get(cardio_key))
+    for campo in _CARDIO_WIDGET_FIELDS:
+        widget_key = f"{cardio_key}_{campo}"
+        if widget_key not in st.session_state:
+            continue
+        valor = st.session_state.get(widget_key)
+        if isinstance(valor, str):
+            base[campo] = valor.strip()
+        else:
+            base[campo] = valor
+    st.session_state[cardio_key] = base
+    return base
+
+
+def _sincronizar_cardio_formulario(dias_labels: list[str]) -> None:
+    """Asegura que todos los días envíen sus valores recientes de cardio a session_state."""
+    for idx in range(len(dias_labels)):
+        cardio_key = f"rutina_dia_{idx + 1}_Cardio"
+        if cardio_key in st.session_state:
+            _sync_cardio_state_from_widgets(idx + 1)
 
 
 def _construir_datos_borrador(dias_labels: list[str]) -> dict:
@@ -1234,16 +1325,17 @@ def crear_rutinas():
         "Peso",
         "RIR (Min/Max)",
         "Progresión",
+        "Set Mode",
         "Copiar",
         "Borrar",
         "Video",
     ]
-    BASE_SIZES = [1.0, 2.5, 2.5, 2.0, 0.7, 1.4, 1.0, 1.4, 1.0, 0.6, 0.6, 0.7]  
+    BASE_SIZES = [1.0, 2.5, 2.5, 2.0, 0.7, 1.4, 1.0, 1.4, 1.0, 1.0, 0.6, 0.6, 0.7]  
     # 👆 aquí puse 1.6 en RIR para que quepan dos casillas
 
     columnas_tabla = [
         "Circuito", "Sección", "Ejercicio", "Detalle", "Series", "Repeticiones",
-        "Peso", "Tiempo", "Velocidad", "Descanso", "RIR", "Tipo", "Video"
+        "Peso", "Tiempo", "Descanso", "RIR", "Tipo", "Video"
     ]
 
     def _reset_fila(key_seccion: str, fila_idx: int, seccion_actual: str, key_entrenamiento: str) -> None:
@@ -1262,11 +1354,12 @@ def crear_rutinas():
         fila_vacia["RirMax"] = ""
         fila_vacia["Video"] = ""
         fila_vacia["_exact_on_load"] = False
+        fila_vacia.pop("TopSetData", None)
         filas_sec[fila_idx] = fila_vacia
 
         prefixes = [
             "circ", "buscar", "select", "det", "ser", "rmin",
-            "rmax", "peso", "tiempo", "vel", "desc", "rirmin",
+            "rmax", "peso", "tiempo", "desc", "rirmin",
             "rirmax"
         ]
         for pref in prefixes:
@@ -1282,6 +1375,7 @@ def crear_rutinas():
             st.session_state.pop(f"condval{p}_{key_entrenamiento}_{fila_idx}", None)
 
         st.session_state.pop(f"prog_check_{key_entrenamiento}_{fila_idx}", None)
+        st.session_state.pop(f"topset_check_{key_entrenamiento}_{fila_idx}", None)
         st.session_state.pop(f"copy_check_{key_entrenamiento}_{fila_idx}", None)
         st.session_state.pop(f"delete_{key_entrenamiento}_{fila_idx}", None)
         st.session_state.pop(f"search_cache_{key_entrenamiento}", None)
@@ -1343,7 +1437,7 @@ def crear_rutinas():
             # --- Encabezado de sección con toggles ---
             st.markdown(SECTION_CONTAINER_HTML, unsafe_allow_html=True)
             # +1 columna a la derecha para el botón "Crear ejercicio"
-            head_cols = st.columns([6.9, 1.1, 1.2, 1.2, 1.6], gap="small")
+            head_cols = st.columns([6.0, 1.4, 1.4, 1.4, 1.4, 1.6], gap="small")
 
             with head_cols[0]:
                 st.markdown(f"<h4 class='h-accent' style='margin-top:2px'>{seccion}</h4>", unsafe_allow_html=True)
@@ -1354,12 +1448,18 @@ def crear_rutinas():
                     value=st.session_state.get(f"show_tiempo_{key_seccion}", False),
                 )
             with head_cols[2]:
-                show_vel_sec = st.toggle(
-                    "Velocidad",
-                    key=f"show_vel_{key_seccion}",
-                    value=st.session_state.get(f"show_vel_{key_seccion}", False),
+                show_progresion_sec = st.toggle(
+                    "Progresión",
+                    key=f"show_prog_{key_seccion}",
+                    value=st.session_state.get(f"show_prog_{key_seccion}", False),
                 )
             with head_cols[3]:
+                show_top_set_sec = st.toggle(
+                    "Set Mode",
+                    key=f"show_topset_{key_seccion}",
+                    value=st.session_state.get(f"show_topset_{key_seccion}", False),
+                )
+            with head_cols[4]:
                 show_descanso_sec = st.toggle(
                     "Descanso",
                     key=f"show_desc_{key_seccion}",
@@ -1368,7 +1468,7 @@ def crear_rutinas():
             
             # --- Botón/Popover: "＋" Crear ejercicio (encabezado de sección) con permisos ---
             if _tiene_permiso_agregar():
-                pop = head_cols[4].popover("＋", use_container_width=True)  # ← sin key (tu Streamlit no lo soporta)
+                pop = head_cols[5].popover("＋", use_container_width=True)  # ← sin key (tu Streamlit no lo soporta)
                 with pop:
                     st.markdown("**📌 Crear o Editar Ejercicio (rápido)**")
 
@@ -1553,7 +1653,7 @@ def crear_rutinas():
                                     except Exception as e:
                                         st.error(f"❌ Error al guardar: {e}")
             else:
-                head_cols[4].button("＋", use_container_width=True, disabled=True)
+                head_cols[5].button("＋", use_container_width=True, disabled=True)
                 st.caption("Solo *Administrador* o *Entrenador* pueden crear ejercicios.")
 
             # ======= Construcción dinámica de columnas =======
@@ -1566,18 +1666,27 @@ def crear_rutinas():
             # después
             rir_idx = headers.index("RIR (Min/Max)")
 
-
             if show_tiempo_sec:
                 headers.insert(rir_idx, "Tiempo")
                 sizes.insert(rir_idx, 0.9)
                 rir_idx += 1
-            if show_vel_sec:
-                headers.insert(rir_idx, "Velocidad")
-                sizes.insert(rir_idx, 1.0)
-                rir_idx += 1
             if show_descanso_sec:
                 headers.insert(rir_idx, "Descanso")
                 sizes.insert(rir_idx, 0.9)
+                rir_idx += 1
+
+            if not show_progresion_sec:
+                prog_idx = headers.index("Progresión")
+                headers.pop(prog_idx)
+                sizes.pop(prog_idx)
+            if not show_top_set_sec:
+                try:
+                    top_idx = headers.index("Set Mode")
+                except ValueError:
+                    top_idx = -1
+                if top_idx >= 0:
+                    headers.pop(top_idx)
+                    sizes.pop(top_idx)
 
             # ---------- Edición por sección ----------
             section_container = st.container()
@@ -1675,11 +1784,16 @@ def crear_rutinas():
                     elif not ejercicios_encontrados:
                         ejercicios_encontrados = ["(sin resultados)"]
 
+                    nombre_actual = (fila.get("Ejercicio", "") or "").strip()
+                    if nombre_actual and nombre_actual not in ejercicios_encontrados:
+                        ejercicios_encontrados = [nombre_actual] + [opt for opt in ejercicios_encontrados if opt != nombre_actual]
+                    idx_sel = ejercicios_encontrados.index(nombre_actual) if nombre_actual in ejercicios_encontrados else 0
+
                     seleccionado = cols[pos["Ejercicio"]].selectbox(
                         "",
                         ejercicios_encontrados,
                         key=f"select_{key_entrenamiento}",
-                        index=0,
+                        index=idx_sel,
                         label_visibility="collapsed"
                     )
 
@@ -1761,14 +1875,6 @@ def crear_rutinas():
                     else:
                         fila.setdefault("Tiempo","")
 
-                    if "Velocidad" in pos:
-                        fila["Velocidad"] = cols[pos["Velocidad"]].text_input(
-                            "", value=str(fila.get("Velocidad","")),
-                            key=f"vel_{key_entrenamiento}", label_visibility="collapsed", placeholder="m/s"
-                        )
-                    else:
-                        fila.setdefault("Velocidad","")
-
                     if "Descanso" in pos:
                         valor_actual_desc = str(fila.get("Descanso", "")).strip()
                         if " " in valor_actual_desc:
@@ -1795,12 +1901,14 @@ def crear_rutinas():
                         key=f"rirmax_{key_entrenamiento}", label_visibility="collapsed", placeholder="Max"
                     )
 
-                    prog_cols = cols[pos["Progresión"]].columns([1, 1, 1])
-                    mostrar_progresion = prog_cols[1].checkbox(
-                        "",
-                        key=f"prog_check_{key_entrenamiento}_{idx}",
-                        label_visibility="collapsed",
-                    )
+                    mostrar_progresion = False
+                    if show_progresion_sec and "Progresión" in pos:
+                        prog_cols = cols[pos["Progresión"]].columns([1, 1, 1])
+                        mostrar_progresion = prog_cols[1].checkbox(
+                            "",
+                            key=f"prog_check_{key_entrenamiento}_{idx}",
+                            label_visibility="collapsed",
+                        )
 
                     copy_cols = cols[pos["Copiar"]].columns([1, 1, 1])
                     mostrar_copia = copy_cols[1].checkbox(
@@ -1845,7 +1953,7 @@ def crear_rutinas():
                         operacion_key = f"Operacion_{p}"
                         semanas_key = f"Semanas_{p}"
 
-                        opciones_var = ["", "peso", "velocidad", "tiempo", "descanso", "rir", "series", "repeticiones"]
+                        opciones_var = ["", "peso", "tiempo", "descanso", "rir", "series", "repeticiones"]
                         opciones_ope = ["", "multiplicacion", "division", "suma", "resta"]
 
                         fila[variable_key] = pcols[0].selectbox(
@@ -1886,6 +1994,81 @@ def crear_rutinas():
                         pcols[6].text_input(
                             "Valor condición", value=str(fila.get(f"CondicionValor_{p}", "") or ""), key=cond_val_key
                         )
+
+                    mostrar_top_set = False
+                    top_set_state_key = f"topset_check_{key_entrenamiento}_{idx}"
+                    if show_top_set_sec and "Set Mode" in pos:
+                        top_cols = cols[pos["Set Mode"]].columns([1, 1, 1])
+                        mostrar_top_set = top_cols[1].checkbox(
+                            "",
+                            key=top_set_state_key,
+                            label_visibility="collapsed",
+                        )
+                    else:
+                        st.session_state.pop(top_set_state_key, None)
+
+                    if mostrar_top_set:
+                        st.markdown(SECTION_BREAK_HTML, unsafe_allow_html=True)
+                        num_sets = _parse_series_count(fila.get("Series"))
+                        if num_sets <= 0:
+                            st.info("Define un número de series para generar los Set Mode.")
+                            fila.pop("TopSetData", None)
+                        else:
+                            datos_top = fila.get("TopSetData")
+                            if not isinstance(datos_top, list):
+                                datos_top = []
+                            datos_top = _ensure_topset_len(datos_top, num_sets)
+                            for set_idx in range(num_sets):
+                                set_key = f"topset_{key_entrenamiento}_{idx}_{set_idx}"
+                                fila_cols_top = st.columns(sizes)
+                                datos_top[set_idx]["Series"] = fila_cols_top[pos["Series"]].text_input(
+                                    "",
+                                    value=str(datos_top[set_idx].get("Series", "")),
+                                    key=f"{set_key}_series",
+                                    label_visibility="collapsed",
+                                    placeholder=f"Serie {set_idx + 1}",
+                                )
+                                rep_cols_top = fila_cols_top[pos["Repeticiones"]].columns(2)
+                                datos_top[set_idx]["RepsMin"] = rep_cols_top[0].text_input(
+                                    "",
+                                    value=str(datos_top[set_idx].get("RepsMin", "")),
+                                    key=f"{set_key}_rmin",
+                                    label_visibility="collapsed",
+                                    placeholder="Min",
+                                )
+                                datos_top[set_idx]["RepsMax"] = rep_cols_top[1].text_input(
+                                    "",
+                                    value=str(datos_top[set_idx].get("RepsMax", "")),
+                                    key=f"{set_key}_rmax",
+                                    label_visibility="collapsed",
+                                    placeholder="Max",
+                                )
+                                datos_top[set_idx]["Peso"] = fila_cols_top[pos["Peso"]].text_input(
+                                    "",
+                                    value=str(datos_top[set_idx].get("Peso", "")),
+                                    key=f"{set_key}_peso",
+                                    label_visibility="collapsed",
+                                    placeholder="Kg",
+                                )
+                                rir_cols_top = fila_cols_top[pos["RIR (Min/Max)"]].columns(2)
+                                datos_top[set_idx]["RirMin"] = rir_cols_top[0].text_input(
+                                    "",
+                                    value=str(datos_top[set_idx].get("RirMin", "")),
+                                    key=f"{set_key}_rirmin",
+                                    label_visibility="collapsed",
+                                    placeholder="Min",
+                                )
+                                datos_top[set_idx]["RirMax"] = rir_cols_top[1].text_input(
+                                    "",
+                                    value=str(datos_top[set_idx].get("RirMax", "")),
+                                    key=f"{set_key}_rirmax",
+                                    label_visibility="collapsed",
+                                    placeholder="Max",
+                                )
+                            fila["TopSetData"] = datos_top
+                    else:
+                        if show_top_set_sec:
+                            fila.pop("TopSetData", None)
 
                     if mostrar_copia:
                         filas_para_copiar.append((idx, dict(fila)))
@@ -1958,7 +2141,7 @@ def crear_rutinas():
         cardio_state_key = f"rutina_dia_{i + 1}_Cardio"
         if cardio_state_key not in st.session_state or not isinstance(st.session_state[cardio_state_key], dict):
             st.session_state[cardio_state_key] = _default_cardio_data()
-        cardio_data = st.session_state[cardio_state_key]
+        cardio_data = _sync_cardio_state_from_widgets(i + 1)
 
         tipo_key = f"{cardio_state_key}_tipo"
         if tipo_key not in st.session_state:
@@ -2059,7 +2242,7 @@ def crear_rutinas():
             placeholder="Notas extra sobre el trabajo cardiovascular…",
         )
         st.markdown("</div>", unsafe_allow_html=True)
-        st.session_state[cardio_state_key] = cardio_data
+        _sync_cardio_state_from_widgets(i + 1)
 
         st.markdown(SECTION_BREAK_HTML, unsafe_allow_html=True)
 
@@ -2433,11 +2616,37 @@ def crear_rutinas():
                             "repeticiones": rep_str,
                             "peso": ejv.get("Peso",""),
                             "tiempo": ejv.get("Tiempo",""),
-                            "velocidad": ejv.get("Velocidad",""),
                             "descanso": ejv.get("Descanso",""),
                             "rir": rir_str,
                             "tipo": ejv.get("Tipo",""),
                         })
+                        top_sets = ejv.get("TopSetData")
+                        if isinstance(top_sets, list):
+                            for idx_top, set_data in enumerate(top_sets):
+                                rep_top = ""
+                                mn_top, mx_top = set_data.get("RepsMin",""), set_data.get("RepsMax","")
+                                if mn_top and mx_top:
+                                    rep_top = f"{mn_top}–{mx_top}"
+                                elif mn_top or mx_top:
+                                    rep_top = str(mn_top or mx_top)
+                                rir_top = ""
+                                mn_rt, mx_rt = set_data.get("RirMin",""), set_data.get("RirMax","")
+                                if mn_rt and mx_rt:
+                                    rir_top = f"{mn_rt}–{mx_rt}"
+                                elif mn_rt or mx_rt:
+                                    rir_top = str(mn_rt or mx_rt)
+                                tabla.append({
+                                    "bloque": ejv.get("Sección") or ("Warm Up" if ejv.get("Circuito","") in ["A","B","C"] else "Work Out"),
+                                    "circuito": ejv.get("Circuito",""),
+                                    "ejercicio": f"{ejv.get('Ejercicio','')} (Set Mode {idx_top + 1})",
+                                    "series": set_data.get("Series",""),
+                                    "repeticiones": rep_top,
+                                    "peso": set_data.get("Peso",""),
+                                    "tiempo": "",
+                                    "descanso": "",
+                                    "rir": rir_top,
+                                    "tipo": "",
+                                })
 
                     if hay_cardio:
                         cardio_row = {
@@ -2448,7 +2657,6 @@ def crear_rutinas():
                             "repeticiones": cardio_preview.get("intervalos", ""),
                             "peso": "",
                             "tiempo": cardio_preview.get("tiempo_trabajo", ""),
-                            "velocidad": cardio_preview.get("intensidad_trabajo", ""),
                             "descanso": cardio_preview.get("tiempo_descanso", ""),
                             "rir": cardio_preview.get("intensidad_descanso", ""),
                             "tipo": cardio_preview.get("tipo_descanso", ""),
@@ -2464,7 +2672,6 @@ def crear_rutinas():
                                 "repeticiones": "",
                                 "peso": "",
                                 "tiempo": "",
-                                "velocidad": "",
                                 "descanso": "",
                                 "rir": "",
                                 "tipo": "",
@@ -2493,6 +2700,7 @@ def crear_rutinas():
             st.warning("⚠️ Ingresa el correo del cliente antes de guardar un borrador.")
         else:
             _sincronizar_filas_formulario(dias_labels)
+            _sincronizar_cardio_formulario(dias_labels)
             dias_data = _construir_datos_borrador(dias_labels)
 
             correo_norm = correo_ingresado.lower()
@@ -2540,6 +2748,7 @@ def crear_rutinas():
         if all([str(nombre_sel).strip(), str(correo).strip(), str(entrenador).strip()]):
             objetivo_val = st.session_state.get("objetivo", "")
             _sincronizar_filas_formulario(dias_labels)
+            _sincronizar_cardio_formulario(dias_labels)
             guardar_rutina(
                 nombre_sel.strip(),
                 correo.strip(),

@@ -11,6 +11,7 @@ from firebase_admin import firestore
 
 from app_core.ejercicios_catalogo import obtener_ejercicios_disponibles
 from app_core.firebase_client import get_db
+from app_core.email_notifications import enviar_correo_rutina_disponible
 from app_core.theme import inject_theme
 from app_core.video_utils import (
     normalizar_link_youtube as _normalizar_link_youtube,
@@ -167,6 +168,87 @@ def _resolver_id_implemento(marca: str, maquina: str) -> str:
         return candidatos[0] if len(candidatos) == 1 else ""
     except Exception:
         return ""
+
+
+CARDIO_FIELDS = (
+    "tipo",
+    "modalidad",
+    "indicaciones",
+    "series",
+    "intervalos",
+    "tiempo_trabajo",
+    "intensidad_trabajo",
+    "tiempo_descanso",
+    "tipo_descanso",
+    "intensidad_descanso",
+)
+
+
+def _default_cardio_data() -> dict:
+    return {
+        "tipo": "LISS",
+        "modalidad": "",
+        "indicaciones": "",
+        "series": "",
+        "intervalos": "",
+        "tiempo_trabajo": "",
+        "intensidad_trabajo": "",
+        "tiempo_descanso": "",
+        "tipo_descanso": "",
+        "intensidad_descanso": "",
+    }
+
+
+def _normalizar_cardio_data(cardio: dict | None) -> dict:
+    data = _default_cardio_data()
+    if isinstance(cardio, dict):
+        for campo in data:
+            valor = cardio.get(campo, data[campo])
+            if isinstance(valor, str):
+                data[campo] = valor.strip()
+            else:
+                data[campo] = valor
+    if data["tipo"] not in {"LISS", "HIIT"}:
+        data["tipo"] = "LISS"
+    return data
+
+
+def _cardio_tiene_datos(cardio: dict | None) -> bool:
+    if not isinstance(cardio, dict):
+        return False
+    for campo in CARDIO_FIELDS:
+        if campo == "tipo":
+            continue
+        valor = cardio.get(campo, "")
+        if isinstance(valor, str) and valor.strip():
+            return True
+        if not isinstance(valor, str) and valor not in (None, ""):
+            return True
+    return False
+
+
+def _set_cardio_en_session(idx_dia: int, cardio_data: dict | None) -> None:
+    key = f"rutina_dia_{idx_dia}_Cardio"
+    normalizado = _normalizar_cardio_data(cardio_data)
+    st.session_state[key] = normalizado
+    for campo, valor in normalizado.items():
+        st.session_state[f"{key}_{campo}"] = valor
+
+
+def _sync_cardio_desde_widgets(idx_dia: int) -> dict:
+    key = f"rutina_dia_{idx_dia}_Cardio"
+    base = _normalizar_cardio_data(st.session_state.get(key))
+    for campo in CARDIO_FIELDS:
+        widget_key = f"{key}_{campo}"
+        if widget_key not in st.session_state:
+            continue
+        valor = st.session_state.get(widget_key)
+        if isinstance(valor, str):
+            base[campo] = valor.strip()
+        else:
+            base[campo] = valor
+    st.session_state[key] = base
+    return base
 
 
 def correo_actual() -> str:
@@ -751,9 +833,15 @@ def limpiar_estado_editar_rutinas():
         st.session_state.pop(key, None)
 
 
-def _cargar_rutina_en_session(rutina_dict: dict):
+def _cargar_rutina_en_session(rutina_dict: dict, cardio_dict: dict | None = None):
     _limpiar_estado_rutina()
-    dias = claves_dias(rutina_dict) or ["1"]
+    dias = claves_dias(rutina_dict) or []
+    cardio_dict = cardio_dict or {}
+    dias_cardio = [str(k) for k in cardio_dict.keys() if str(k).isdigit()]
+    if dias_cardio:
+        dias = sorted(set(dias) | set(dias_cardio), key=lambda x: int(x or 0))
+    if not dias:
+        dias = ["1"]
     st.session_state["dias_editables"] = dias.copy()
     st.session_state["dias_originales"] = dias.copy()
 
@@ -768,11 +856,15 @@ def _cargar_rutina_en_session(rutina_dict: dict):
             (warm_up if fila_ui.get("Sección") == "Warm Up" else work_out).append(fila_ui)
         st.session_state[f"rutina_dia_{idx}_Warm_Up"] = warm_up
         st.session_state[f"rutina_dia_{idx}_Work_Out"] = work_out
+        cardio_payload = cardio_dict.get(str(dia)) or cardio_dict.get(dia)
+        _set_cardio_en_session(idx, cardio_payload)
+        st.session_state[f"mostrar_cardio_{idx}"] = _cardio_tiene_datos(cardio_payload)
     st.session_state[RUTINA_STATE_OWNER_KEY] = "editar"
 
 
-def _construir_rutina_desde_session(dias_originales: list[str]) -> dict[str, list[dict]]:
+def _construir_rutina_desde_session(dias_originales: list[str]) -> tuple[dict[str, list[dict]], dict[str, dict]]:
     resultado: dict[str, list[dict]] = {}
+    cardio_resultado: dict[str, dict] = {}
     for idx, dia in enumerate(dias_originales, start=1):
         warm = st.session_state.get(f"rutina_dia_{idx}_Warm_Up", []) or []
         work = st.session_state.get(f"rutina_dia_{idx}_Work_Out", []) or []
@@ -780,7 +872,10 @@ def _construir_rutina_desde_session(dias_originales: list[str]) -> dict[str, lis
         for fila in warm + work:
             filas.append(_fila_ui_a_ejercicio_firestore_legacy(fila))
         resultado[str(dia)] = filas
-    return resultado
+        cardio_norm = _normalizar_cardio_data(st.session_state.get(f"rutina_dia_{idx}_Cardio"))
+        if _cardio_tiene_datos(cardio_norm):
+            cardio_resultado[str(dia)] = cardio_norm
+    return resultado, cardio_resultado
 
 
 REPORTE_FIELDS = (
@@ -851,6 +946,7 @@ def _guardar_cambios_en_documentos(
     doc_ids: list[str],
     dias_originales: list[str],
     rutina_actualizada: dict[str, list[dict]],
+    cardio_actualizado: dict[str, dict],
 ):
     total = 0
     for doc_id in doc_ids:
@@ -858,7 +954,9 @@ def _guardar_cambios_en_documentos(
         snap = ref.get()
         data = snap.to_dict() or {}
         rutina_actual = data.get("rutina", {}) or {}
+        cardio_actual = data.get("cardio", {}) or {}
         nueva_rutina = dict(rutina_actual)
+        nuevo_cardio = dict(cardio_actual)
         for dia in dias_originales:
             dia_clave = str(dia)
             ejercicios_nuevos = rutina_actualizada.get(dia_clave, [])
@@ -866,8 +964,18 @@ def _guardar_cambios_en_documentos(
                 ejercicios_nuevos = []
             ejercicios_previos = rutina_actual.get(dia_clave, [])
             nueva_rutina[dia_clave] = _fusionar_con_reportes_existentes(ejercicios_previos, ejercicios_nuevos)
+            cardio_dia = cardio_actualizado.get(dia_clave)
+            if _cardio_tiene_datos(cardio_dia):
+                nuevo_cardio[dia_clave] = _normalizar_cardio_data(cardio_dia)
+            else:
+                nuevo_cardio.pop(dia_clave, None)
+        payload = {"rutina": nueva_rutina}
+        if nuevo_cardio:
+            payload["cardio"] = nuevo_cardio
+        elif cardio_actual:
+            payload["cardio"] = {}
         try:
-            ref.update({"rutina": nueva_rutina})
+            ref.update(payload)
             total += 1
         except Exception as exc:
             st.error(f"No pude guardar cambios en '{doc_id}': {exc}")
@@ -886,6 +994,11 @@ def _asegurar_dia_en_session(idx_dia: int):
         st.session_state[wo_key] = []
         if DEFAULT_WO_ROWS_NEW_DAY > 0:
             st.session_state[wo_key] = [_fila_vacia("Work Out") for _ in range(DEFAULT_WO_ROWS_NEW_DAY)]
+    cardio_key = f"rutina_dia_{idx_dia}_Cardio"
+    if cardio_key not in st.session_state or not isinstance(st.session_state[cardio_key], dict):
+        _set_cardio_en_session(idx_dia, _default_cardio_data())
+    else:
+        _sync_cardio_desde_widgets(idx_dia)
 
 
 def _trigger_rerun():
@@ -916,8 +1029,10 @@ def limpiar_dia(idx_dia: int):
     for seccion in ["Warm Up", "Work Out"]:
         key = f"rutina_dia_{idx_dia}_{seccion.replace(' ', '_')}"
         st.session_state[key] = []
+    st.session_state[f"rutina_dia_{idx_dia}_Cardio"] = _default_cardio_data()
+    st.session_state.pop(f"mostrar_cardio_{idx_dia}", None)
     i0 = idx_dia - 1
-    patrones = [f"_{i0}_Warm_Up_", f"_{i0}_Work_Out_"]
+    patrones = [f"_{i0}_Warm_Up_", f"_{i0}_Work_Out_", f"_{i0}_Cardio_"]
     claves_borrar = []
     for k in list(st.session_state.keys()):
         if any(p in k for p in patrones) or k.startswith(f"multiselect_{i0}_") or k.startswith(f"do_copy_{i0}_"):
@@ -1267,11 +1382,20 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
             if not resultados:
                 resultados = ["(sin resultados)"]
 
+            nombre_actual = (fila.get("Ejercicio", "") or "").strip()
+            if nombre_actual:
+                vistos = set()
+                resultados = [r for r in resultados if not (r in vistos or vistos.add(r))]
+                if nombre_actual not in resultados:
+                    resultados = [nombre_actual] + [opt for opt in resultados if opt != nombre_actual]
+            idx_sel = resultados.index(nombre_actual) if nombre_actual in resultados else 0
+
             seleccionado = cols[pos["Ejercicio"]].selectbox(
                 "",
                 resultados,
                 key=f"select_{key_entrenamiento}",
                 label_visibility="collapsed",
+                index=idx_sel,
             )
             if seleccionado == "(sin resultados)":
                 fila["Ejercicio"] = palabra.strip()
@@ -1533,6 +1657,123 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
             st.session_state.pop(pending_key, None)
 
 
+def render_cardio_dia(idx_tab: int):
+    dia_idx = idx_tab + 1
+    cardio_key = f"rutina_dia_{dia_idx}_Cardio"
+    flag_key = f"mostrar_cardio_{dia_idx}"
+    if cardio_key not in st.session_state or not isinstance(st.session_state.get(cardio_key), dict):
+        _set_cardio_en_session(dia_idx, _default_cardio_data())
+    cardio_data = _sync_cardio_desde_widgets(dia_idx)
+    if flag_key not in st.session_state:
+        st.session_state[flag_key] = _cardio_tiene_datos(cardio_data)
+
+    if not st.session_state.get(flag_key):
+        if st.button("➕ Agregar cardio", key=f"add_cardio_{dia_idx}", type="secondary"):
+            st.session_state[flag_key] = True
+            _set_cardio_en_session(dia_idx, cardio_data)
+            _sync_cardio_desde_widgets(dia_idx)
+            _trigger_rerun()
+        st.caption("Este día no tiene trabajo cardiovascular registrado.")
+        return
+
+    st.markdown(SECTION_CONTAINER_HTML, unsafe_allow_html=True)
+    header_cols = st.columns([6.5, 1.3])
+    header_cols[0].markdown("<h4 class='h-accent' style='margin-top:2px'>Cardio</h4>", unsafe_allow_html=True)
+    if header_cols[1].button("Eliminar", key=f"clear_cardio_{dia_idx}", type="secondary"):
+        _set_cardio_en_session(dia_idx, _default_cardio_data())
+        st.session_state[flag_key] = False
+        _trigger_rerun()
+
+    tipo_key = f"{cardio_key}_tipo"
+    if tipo_key not in st.session_state:
+        st.session_state[tipo_key] = cardio_data.get("tipo", "LISS") or "LISS"
+    tipo_sel = st.radio("Tipo de cardio", ["LISS", "HIIT"], key=tipo_key, horizontal=True)
+    cardio_data["tipo"] = tipo_sel
+
+    modalidad_key = f"{cardio_key}_modalidad"
+    if modalidad_key not in st.session_state:
+        st.session_state[modalidad_key] = cardio_data.get("modalidad", "")
+    cardio_data["modalidad"] = st.text_input(
+        "Modalidad",
+        key=modalidad_key,
+        placeholder="Ej. caminata en cinta, bike, remo…",
+    )
+
+    if tipo_sel == "HIIT":
+        hiit_cols_1 = st.columns(2, gap="small")
+        series_key = f"{cardio_key}_series"
+        if series_key not in st.session_state:
+            st.session_state[series_key] = cardio_data.get("series", "")
+        cardio_data["series"] = hiit_cols_1[0].text_input("Número de series", key=series_key, placeholder="Ej. 4")
+
+        intervalos_key = f"{cardio_key}_intervalos"
+        if intervalos_key not in st.session_state:
+            st.session_state[intervalos_key] = cardio_data.get("intervalos", "")
+        cardio_data["intervalos"] = hiit_cols_1[1].text_input("Número de intervalos", key=intervalos_key, placeholder="Ej. 6")
+
+        hiit_cols_2 = st.columns(2, gap="small")
+        tiempo_trabajo_key = f"{cardio_key}_tiempo_trabajo"
+        if tiempo_trabajo_key not in st.session_state:
+            st.session_state[tiempo_trabajo_key] = cardio_data.get("tiempo_trabajo", "")
+        cardio_data["tiempo_trabajo"] = hiit_cols_2[0].text_input(
+            "Tiempo intervalo de trabajo",
+            key=tiempo_trabajo_key,
+            placeholder="Ej. 40\"",
+        )
+
+        intensidad_trabajo_key = f"{cardio_key}_intensidad_trabajo"
+        if intensidad_trabajo_key not in st.session_state:
+            st.session_state[intensidad_trabajo_key] = cardio_data.get("intensidad_trabajo", "")
+        cardio_data["intensidad_trabajo"] = hiit_cols_2[1].text_input(
+            "Intensidad del intervalo de trabajo",
+            key=intensidad_trabajo_key,
+            placeholder="Ej. RPE 8/10",
+        )
+
+        hiit_cols_3 = st.columns(2, gap="small")
+        tiempo_descanso_key = f"{cardio_key}_tiempo_descanso"
+        if tiempo_descanso_key not in st.session_state:
+            st.session_state[tiempo_descanso_key] = cardio_data.get("tiempo_descanso", "")
+        cardio_data["tiempo_descanso"] = hiit_cols_3[0].text_input(
+            "Tiempo de descanso",
+            key=tiempo_descanso_key,
+            placeholder="Ej. 20\"",
+        )
+
+        tipo_descanso_key = f"{cardio_key}_tipo_descanso"
+        if tipo_descanso_key not in st.session_state:
+            st.session_state[tipo_descanso_key] = cardio_data.get("tipo_descanso", "")
+        cardio_data["tipo_descanso"] = hiit_cols_3[1].text_input(
+            "Tipo de descanso",
+            key=tipo_descanso_key,
+            placeholder="Ej. activo, completo…",
+        )
+
+        intensidad_descanso_key = f"{cardio_key}_intensidad_descanso"
+        if intensidad_descanso_key not in st.session_state:
+            st.session_state[intensidad_descanso_key] = cardio_data.get("intensidad_descanso", "")
+        cardio_data["intensidad_descanso"] = st.text_input(
+            "Intensidad del intervalo de descanso",
+            key=intensidad_descanso_key,
+            placeholder="Ej. RPE 4/10",
+        )
+    else:
+        # cuando el modo es LISS mantenemos consistencia en los widgets
+        for campo in ("series", "intervalos", "tiempo_trabajo", "intensidad_trabajo", "tiempo_descanso", "tipo_descanso", "intensidad_descanso"):
+            st.session_state.setdefault(f"{cardio_key}_{campo}", cardio_data.get(campo, ""))
+
+    indicaciones_key = f"{cardio_key}_indicaciones"
+    if indicaciones_key not in st.session_state:
+        st.session_state[indicaciones_key] = cardio_data.get("indicaciones", "")
+    cardio_data["indicaciones"] = st.text_area(
+        "Indicaciones",
+        key=indicaciones_key,
+        placeholder="Notas extra sobre el trabajo cardiovascular…",
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+    _sync_cardio_desde_widgets(dia_idx)
+
+
 def editar_rutinas():
     st.markdown("<h2 class='h-accent'>✏️ Editar Rutinas</h2>", unsafe_allow_html=True)
     db = get_db()
@@ -1707,7 +1948,7 @@ def editar_rutinas():
     clave_actual = f"{correo_cliente}__{doc_id_semana}"
     if estado_actual != clave_actual:
         rutina_dict = doc_data.get("rutina", {}) or {}
-        _cargar_rutina_en_session(rutina_dict)
+        _cargar_rutina_en_session(rutina_dict, doc_data.get("cardio") or {})
         st.session_state["_editar_rutina_actual"] = clave_actual
 
     st.caption(f"Semana seleccionada: **{semana_sel}** · Cliente: **{nombre_cliente}**")
@@ -1747,11 +1988,22 @@ def editar_rutinas():
             render_tabla_dia(idx, "Warm Up", progresion_activa, dias_labels)
             st.markdown(SECTION_BREAK_HTML, unsafe_allow_html=True)
             render_tabla_dia(idx, "Work Out", progresion_activa, dias_labels)
+            st.markdown(SECTION_BREAK_HTML, unsafe_allow_html=True)
+            render_cardio_dia(idx)
 
     dias_actualizados = st.session_state.get("dias_originales", dias_originales)
-    rutina_nueva = _construir_rutina_desde_session(dias_actualizados)
+    rutina_nueva, cardio_nuevo = _construir_rutina_desde_session(dias_actualizados)
 
-    if st.button("Guardar rutina", type="primary"):
+    action_cols = st.columns([1, 1], gap="medium")
+    notificar_correo = action_cols[0].checkbox(
+        "Notificar por correo",
+        value=False,
+        key="editar_rutinas_notificar_correo",
+        help="Envía un correo al atleta avisando que su rutina fue actualizada.",
+    )
+    guardar_clicked = action_cols[1].button("Guardar rutina", type="primary", use_container_width=True)
+
+    if guardar_clicked:
         try:
             bloque_actual = doc_data.get("bloque_rutina", "")
             fecha_base = datetime.strptime(semana_sel, "%Y-%m-%d")
@@ -1778,13 +2030,34 @@ def editar_rutinas():
                 continue
             doc_ids_destino.append(doc_id)
 
-        total = _guardar_cambios_en_documentos(db, doc_ids_destino, dias_actualizados, rutina_nueva)
+        total = _guardar_cambios_en_documentos(db, doc_ids_destino, dias_actualizados, rutina_nueva, cardio_nuevo)
         if total:
             for doc_id in doc_ids_destino:
                 snap = db.collection("rutinas_semanales").document(doc_id).get()
                 datos_cache[doc_id] = snap.to_dict() or {}
             doc_data = datos_cache.get(doc_id_semana) or {}
             st.success(f"Rutina guardada en {total} semana(s).")
+            if notificar_correo:
+                nombre_email = (doc_data.get("cliente") or "").strip()
+                if not nombre_email:
+                    nombre_email = str(nombre_cliente).split("(")[0].strip()
+                empresa_cliente = empresa_de_usuario(correo_cliente, usuarios_map)
+                coach_correo = (doc_data.get("entrenador") or correo_login or "").strip()
+                semanas_notificadas = max(1, len(doc_ids_destino))
+                envio_ok = enviar_correo_rutina_disponible(
+                    correo=correo_cliente,
+                    nombre=nombre_email,
+                    fecha_inicio=fecha_base,
+                    semanas=semanas_notificadas,
+                    empresa=empresa_cliente,
+                    coach=coach_correo,
+                )
+                if envio_ok:
+                    st.caption("El cliente fue notificado por correo con la rutina editada.")
+                else:
+                    st.caption("No se pudo enviar el aviso por correo; revisa la configuración de notificaciones.")
+            else:
+                st.caption("No se envió correo porque la notificación está desactivada.")
             st.session_state["_editar_rutina_actual"] = clave_actual
             _trigger_rerun()
 

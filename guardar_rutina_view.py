@@ -129,6 +129,35 @@ def _cardio_tiene_datos(cardio: dict | None) -> bool:
     return False
 
 
+def _normalizar_top_sets(data) -> list[dict]:
+    """Devuelve una lista de top sets con las claves esperadas si hay datos útiles."""
+    campos = ("Series", "RepsMin", "RepsMax", "Peso", "RirMin", "RirMax")
+    normalizados: list[dict] = []
+    if isinstance(data, dict):
+        data_iterable = data.values()
+    elif isinstance(data, (list, tuple)):
+        data_iterable = data
+    else:
+        data_iterable = []
+
+    for item in data_iterable:
+        if not isinstance(item, dict):
+            continue
+        limpio = {}
+        tiene_valor = False
+        for campo in campos:
+            valor = item.get(campo)
+            if valor is None:
+                valor = item.get(campo.lower())
+            valor_str = _s(valor)
+            limpio[campo] = valor_str
+            if valor_str:
+                tiene_valor = True
+        if tiene_valor:
+            normalizados.append(limpio)
+    return normalizados
+
+
 def _listar_ejercicios_de_dia(data):
     if isinstance(data, list):
         return [e for e in data if isinstance(e, dict)]
@@ -553,7 +582,11 @@ def guardar_rutina(
                         bloque     = ejercicio.get("Sección", seccion)
                         video_link = _s(ejercicio.get("Video", ""))
 
-                        lista_ejercicios.append({
+                        top_sets_clean = _normalizar_top_sets(
+                            ejercicio.get("TopSetData") or ejercicio.get("top_sets")
+                        )
+
+                        registro_ejercicio = {
                             "bloque":     bloque,
                             "circuito":   circuito,
                             "ejercicio":  nombre_ej,
@@ -569,7 +602,11 @@ def guardar_rutina(
                             "rir_max":    rir_max,
                             "tipo":       tipo,
                             "video":      video_link
-                        })
+                        }
+                        if top_sets_clean:
+                            registro_ejercicio["TopSetData"] = top_sets_clean
+
+                        lista_ejercicios.append(registro_ejercicio)
 
                         if seccion.strip().lower() == "work out":
                             _actualizar_series_categoria(
