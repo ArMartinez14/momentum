@@ -505,25 +505,23 @@ DESCANSO_OPCIONES = ["", "1", "2", "3", "4", "5"]
 
 
 class _FuzzyIndex:
-    def __init__(self, nombres: list[str]):
-        self._entries: list[tuple[str, tuple[str, ...]]] = []
-        for nombre in nombres:
+    def __init__(self, ejercicios: dict[str, dict]):
+        self._entries: list[tuple[str, str]] = []
+        for nombre, data in ejercicios.items():
             norm = normalizar_texto(nombre)
-            if not norm:
+            slug = normalizar_texto((data or {}).get("buscable_id") or slug_nombre(nombre))
+            extra_text = f"{norm} {slug}".strip()
+            if not extra_text:
                 continue
-            tokens = tuple(norm.split())
-            self._entries.append((nombre, tokens))
+            self._entries.append((nombre, extra_text))
 
     def search(self, consulta: str) -> list[str]:
         norm = normalizar_texto(consulta)
         if not norm:
             return []
-        tokens = tuple(norm.split())
-        if not tokens:
-            return []
         resultados: list[str] = []
-        for nombre, tokens_nombre in self._entries:
-            if all(token in tokens_nombre for token in tokens):
+        for nombre, extra_text in self._entries:
+            if norm in extra_text:
                 resultados.append(nombre)
         return resultados
 
@@ -533,7 +531,7 @@ def _get_fuzzy_index(ejercicios_dict: dict[str, dict]) -> _FuzzyIndex:
     claves = tuple(sorted(ejercicios_dict.keys()))
     if cache and cache.get("claves") == claves:
         return cache["index"]
-    index = _FuzzyIndex(list(ejercicios_dict.keys()))
+    index = _FuzzyIndex(ejercicios_dict)
     st.session_state["_fuzzy_index_cache"] = {"claves": claves, "index": index}
     return index
 

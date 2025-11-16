@@ -142,11 +142,36 @@ def _candidatos_por_slug(db, slug: str) -> list[dict]:
     return resultado
 
 
+def _candidatos_locales_por_slug(slug: str) -> list[dict]:
+    global EJERCICIOS
+    if not slug:
+        return []
+    catalogo_local = EJERCICIOS or {}
+    if not catalogo_local:
+        catalogo_local = _refrescar_catalogo()
+        if isinstance(catalogo_local, dict):
+            EJERCICIOS.update(catalogo_local)
+    coincidencias: list[dict] = []
+    for nombre, data in catalogo_local.items():
+        if _buscable_id(nombre) != slug:
+            continue
+        entrada = dict(data or {})
+        if "_doc_id" not in entrada:
+            doc_id = entrada.get("doc_id") or entrada.get("id") or ""
+            if not doc_id:
+                doc_id = slug
+            entrada["_doc_id"] = doc_id
+        coincidencias.append(entrada)
+    return coincidencias
+
+
 def _video_catalogo_para_nombre(db, nombre: str, correo_entrenador: str) -> tuple[str, str]:
     slug = _buscable_id(nombre)
     if not slug:
         return "", ""
     candidatos = _candidatos_por_slug(db, slug)
+    if not candidatos:
+        candidatos = _candidatos_locales_por_slug(slug)
     if not candidatos:
         return "", ""
     correo_norm = (correo_entrenador or "").strip().lower()
@@ -375,7 +400,7 @@ def _refrescar_catalogo() -> dict[str, dict]:
     return obtener_ejercicios_disponibles()
 
 
-EJERCICIOS = _refrescar_catalogo()
+EJERCICIOS: dict[str, dict] = {}
 USUARIOS = cargar_usuarios()
 IMPLEMENTOS = cargar_implementos()
 
@@ -850,6 +875,43 @@ def _reemplazar_videos_inconsistentes(
     return total
 
 
+def _reset_video_diff_selection() -> None:
+    for key in list(st.session_state.keys()):
+        if key.startswith("_video_diff_chk_"):
+            st.session_state.pop(key, None)
+        elif key.startswith("_video_diff_show_"):
+            st.session_state.pop(key, None)
+
+
+def _sync_video_diff_checkbox_state(total: int) -> None:
+    for key in list(st.session_state.keys()):
+        if not key.startswith("_video_diff_chk_"):
+            continue
+        try:
+            idx = int(key.rsplit("_", 1)[-1])
+        except ValueError:
+            continue
+        if idx >= total:
+            st.session_state.pop(key, None)
+
+
+def _render_video_preview_button(url: str, label: str, key_suffix: str) -> None:
+    url = (url or "").strip()
+    if not url:
+        st.caption(f"{label}: sin video")
+        return
+    video_norm = _normalizar_video_url(url)
+    if not video_norm:
+        st.markdown(f"{label}: [Ver enlace]({url})")
+        return
+    btn_key = f"_video_diff_btn_{key_suffix}"
+    show_key = f"_video_diff_show_{key_suffix}"
+    if st.button(f"{label} ▶️", key=btn_key):
+        st.session_state[show_key] = not st.session_state.get(show_key, False)
+    if st.session_state.get(show_key):
+        st.video(video_norm)
+
+
 def _limpiar_estado_rutina():
     patrones = (
         "rutina_dia_",
@@ -1005,6 +1067,7 @@ def _guardar_cambios_en_documentos(
     dias_originales: list[str],
     rutina_actualizada: dict[str, list[dict]],
     cardio_actualizado: dict[str, dict],
+    objetivo_actualizado: str | None = None,
 ):
     total = 0
     for doc_id in doc_ids:
@@ -1032,6 +1095,8 @@ def _guardar_cambios_en_documentos(
             payload["cardio"] = nuevo_cardio
         elif cardio_actual:
             payload["cardio"] = {}
+        if objetivo_actualizado is not None:
+            payload["objetivo"] = objetivo_actualizado
         try:
             ref.update(payload)
             total += 1
@@ -1388,10 +1453,15 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
     def _buscar_fuzzy(palabra: str) -> list[str]:
         if not palabra.strip():
             return []
-        tokens = normalizar_texto(palabra).split()
+        patron = normalizar_texto(palabra)
+        if not patron:
+            return []
         candidatos = []
-        for nombre in ejercicios_dict.keys():
-            if all(token in normalizar_texto(nombre) for token in tokens):
+        for nombre, data in ejercicios_dict.items():
+            nombre_norm = normalizar_texto(nombre)
+            slug_norm = normalizar_texto((data or {}).get("buscable_id") or _buscable_id(nombre))
+            extra_texto = f"{nombre_norm} {slug_norm}".strip()
+            if patron in extra_texto:
                 candidatos.append(nombre)
         return candidatos
 
@@ -1936,6 +2006,9 @@ def editar_rutinas():
     rol_login = (st.session_state.get("rol") or "").strip().lower()
     empresa_login = empresa_de_usuario(correo_login, usuarios_map) if correo_login else EMPRESA_DESCONOCIDA
 
+    global EJERCICIOS
+    EJERCICIOS = _refrescar_catalogo()
+
     clientes_por_nombre: dict[str, list[str]] = {}
     for doc in db.collection("rutinas_semanales").stream():
         data = doc.to_dict() or {}
@@ -2051,6 +2124,7 @@ def editar_rutinas():
     with st.expander("🔁 Verificar videos distintos al catálogo"):
         if st.button("Buscar videos distintos", key="btn_buscar_videos_diff"):
             inconsistentes = _buscar_videos_inconsistentes(db, doc_data)
+            _reset_video_diff_selection()
             st.session_state["_videos_diff_lista"] = inconsistentes
             st.session_state["_videos_diff_checked"] = True
 
@@ -2059,6 +2133,7 @@ def editar_rutinas():
 
         if revisado_diff:
             if inconsistentes:
+                _sync_video_diff_checkbox_state(len(inconsistentes))
                 df_diff = pd.DataFrame(
                     [
                         {
@@ -2072,12 +2147,32 @@ def editar_rutinas():
                     ]
                 )
                 st.dataframe(df_diff, use_container_width=True, hide_index=True)
+                st.caption("Selecciona los ejercicios a corregir y previsualiza los videos si lo necesitas:")
+                seleccionados: list[dict] = []
+                for idx, item in enumerate(inconsistentes):
+                    cols_diff = st.columns([3, 1, 1])
+                    key_chk = f"_video_diff_chk_{idx}"
+                    etiqueta = f"Día {item['dia']} · {item['ejercicio']}"
+                    with cols_diff[0]:
+                        if key_chk not in st.session_state:
+                            st.session_state[key_chk] = True
+                        marcado = st.checkbox(etiqueta, key=key_chk)
+                        if marcado:
+                            seleccionados.append(item)
+                    with cols_diff[1]:
+                        _render_video_preview_button(item.get("video_actual", ""), "Video rutina", f"actual_{idx}")
+                    with cols_diff[2]:
+                        _render_video_preview_button(item.get("video_catalogo", ""), "Video catálogo", f"catalogo_{idx}")
                 if st.button("Reemplazar por video del catálogo", type="primary", key="btn_aplicar_videos_diff"):
-                    aplicados = _reemplazar_videos_inconsistentes(db, doc_id_semana, doc_data, inconsistentes)
+                    if not seleccionados:
+                        st.info("Selecciona al menos un ejercicio para corregir.")
+                    else:
+                        aplicados = _reemplazar_videos_inconsistentes(db, doc_id_semana, doc_data, seleccionados)
                     if aplicados:
                         st.success(f"Se actualizaron {aplicados} ejercicio(s) con el video del catálogo.")
                         st.session_state.pop("_videos_diff_lista", None)
                         st.session_state.pop("_videos_diff_checked", None)
+                        _reset_video_diff_selection()
                         st.session_state["_editar_rutina_actual"] = None
                         datos_cache[doc_id_semana] = (
                             db.collection("rutinas_semanales").document(doc_id_semana).get().to_dict() or {}
@@ -2098,6 +2193,15 @@ def editar_rutinas():
         st.session_state["_editar_rutina_actual"] = clave_actual
 
     st.caption(f"Semana seleccionada: **{semana_sel}** · Cliente: **{nombre_cliente}**")
+
+    objetivo_widget_key = f"editar_objetivo_{doc_id_semana}"
+    objetivo_input = st.text_area(
+        "🎯 Objetivo de la rutina (se muestra en la vista de rutinas)",
+        value=str(doc_data.get("objetivo") or ""),
+        key=objetivo_widget_key,
+        placeholder="Describe en pocas líneas el foco principal de este bloque (opcional).",
+        help="Este texto aparecerá bajo el nombre del cliente cuando se consulte la rutina.",
+    )
 
     if st.button("➕ Agregar día", type="secondary"):
         _agregar_dia()
@@ -2176,7 +2280,15 @@ def editar_rutinas():
                 continue
             doc_ids_destino.append(doc_id)
 
-        total = _guardar_cambios_en_documentos(db, doc_ids_destino, dias_actualizados, rutina_nueva, cardio_nuevo)
+        objetivo_para_guardar = objetivo_input.strip()
+        total = _guardar_cambios_en_documentos(
+            db,
+            doc_ids_destino,
+            dias_actualizados,
+            rutina_nueva,
+            cardio_nuevo,
+            objetivo_para_guardar,
+        )
         if total:
             for doc_id in doc_ids_destino:
                 snap = db.collection("rutinas_semanales").document(doc_id).get()

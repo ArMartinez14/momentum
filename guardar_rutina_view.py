@@ -1,6 +1,7 @@
 # guardar_rutina_view.py — progresión acumulativa + RIR min/max + soporte "descanso" + series como progresión + fallbacks
 from collections import defaultdict
 from datetime import timedelta
+import re
 from firebase_admin import firestore
 from herramientas import aplicar_progresion, normalizar_texto
 import streamlit as st
@@ -8,6 +9,7 @@ import uuid
 from app_core.firebase_client import get_db
 from app_core.email_notifications import enviar_correo_rutina_disponible
 from app_core.utils import empresa_de_usuario
+from app_core.video_utils import normalizar_link_youtube
 
 # -------------------------
 # Helpers de conversión
@@ -68,6 +70,44 @@ def _f(v):
 def _s(v):
     """Sanea strings: None -> "", strip() y garantiza tipo str."""
     return str(v or "").strip()
+
+
+_VIDEO_URL_REGEX = re.compile(r"(https?://[^\s]+)", re.IGNORECASE)
+
+
+def _limpiar_video_url(url: str) -> str:
+    """Normaliza links de YouTube y deja pasar otros enlaces saneados."""
+    candidato = _s(url)
+    if not candidato:
+        return ""
+    normalizado = normalizar_link_youtube(candidato)
+    return normalizado or candidato
+
+
+def _video_desde_detalle(texto: str) -> str:
+    """Extrae el primer link útil dentro del detalle del ejercicio."""
+    if not texto:
+        return ""
+    match = _VIDEO_URL_REGEX.search(texto)
+    if not match:
+        return ""
+    posible = match.group(1).rstrip(").,;]")
+    return _limpiar_video_url(posible)
+
+
+def _resolver_video_para_guardado(nombre_ejercicio: str, video_raw: str, detalle_raw: str, ejercicios_meta: dict[str, dict]) -> str:
+    """Garantiza que el video final coincida con el ejercicio o con un link personalizado."""
+    video_trabajo = _limpiar_video_url(video_raw)
+    detalle_link = _video_desde_detalle(detalle_raw)
+    if detalle_link:
+        return detalle_link
+
+    meta = (ejercicios_meta or {}).get(nombre_ejercicio, {}) or {}
+    meta_video = _limpiar_video_url(meta.get("video") or meta.get("Video"))
+    if meta_video:
+        if not video_trabajo or video_trabajo != meta_video:
+            return meta_video
+    return video_trabajo
 
 def parsear_semanas(semanas_txt: str) -> list[int]:
     """Convierte '2,3,5' -> [2,3,5]."""
@@ -580,7 +620,12 @@ def guardar_rutina(
                         tipo       = _s(ejercicio.get("Tipo", ""))
                         circuito   = _s(ejercicio.get("Circuito", ""))
                         bloque     = ejercicio.get("Sección", seccion)
-                        video_link = _s(ejercicio.get("Video", ""))
+                        video_link = _resolver_video_para_guardado(
+                            nombre_ej,
+                            ejercicio.get("Video") or ejercicio.get("video"),
+                            detalle,
+                            ejercicios_meta,
+                        )
 
                         top_sets_clean = _normalizar_top_sets(
                             ejercicio.get("TopSetData") or ejercicio.get("top_sets")

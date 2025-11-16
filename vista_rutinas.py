@@ -876,6 +876,18 @@ def defaults_de_ejercicio(e: dict):
     rir_def  = _num_or_empty(e.get("rir",""))
     return reps_def, peso_def, rir_def
 
+def _nombre_cliente_llave(nombre: str | None) -> str:
+    """
+    Genera una clave normalizada para comparar nombres de cliente sin
+    depender de espacios extra ni mayúsculas/minúsculas.
+    """
+    if nombre is None:
+        return ""
+    texto = str(nombre).strip()
+    if not texto:
+        return ""
+    return " ".join(texto.split()).lower()
+
 # ==========================
 #  Racha por SEMANAS completas
 # ==========================
@@ -1339,6 +1351,7 @@ def ver_rutinas():
     qp_dia = qp_values.get("dia")
 
     cliente_sel = None
+    objetivo_placeholder = None
     if es_entrenador(rol):
         rol_lower = rol.strip().lower()
 
@@ -1604,6 +1617,7 @@ def ver_rutinas():
                     """,
                     unsafe_allow_html=True,
                 )
+            objetivo_placeholder = st.container()
             if st.button("Cambiar deportista", key="volver_lista_clientes", type="secondary", use_container_width=True):
                 st.session_state["_mostrar_lista_clientes"] = True
                 st.session_state.pop("_cliente_sel", None)
@@ -1616,10 +1630,11 @@ def ver_rutinas():
             st.info("Selecciona un deportista y haz clic en \"Ver rutina\" para cargar su rutina.")
             st.stop()
 
+        cliente_sel_key = _nombre_cliente_llave(cliente_sel)
         correos_permitidos = clientes_empresa_info.get(cliente_sel, set())
         rutinas_cliente = [
             r for r in rutinas_all
-            if r.get("cliente") == cliente_sel
+            if _nombre_cliente_llave(r.get("cliente")) == cliente_sel_key
             and (
                 not correos_permitidos
                 or "__no_email__" in correos_permitidos
@@ -1629,6 +1644,7 @@ def ver_rutinas():
     else:
         rutinas_cliente = [r for r in rutinas_all if (r.get("correo","") or "").strip().lower()==correo_raw]
         cliente_sel = nombre
+        cliente_sel_key = _nombre_cliente_llave(cliente_sel)
 
     if not rutinas_cliente:
         st.warning("⚠️ No se encontraron rutinas para ese cliente.")
@@ -1687,13 +1703,22 @@ def ver_rutinas():
 
     # Documento de rutina (cliente + semana)
     if es_entrenador(rol):
-        rutina_doc = next((r for r in rutinas_cliente if r.get("fecha_lunes")==semana_sel and r.get("cliente")==cliente_sel), None)
+        rutina_doc = next(
+            (
+                r
+                for r in rutinas_cliente
+                if r.get("fecha_lunes") == semana_sel and _nombre_cliente_llave(r.get("cliente")) == cliente_sel_key
+            ),
+            None,
+        )
     else:
         rutina_doc = next((r for r in rutinas_cliente if r.get("fecha_lunes")==semana_sel), None)
 
     if not rutina_doc:
         st.warning("⚠️ No hay rutina para esa semana y cliente.")
         st.stop()
+
+    objetivo_texto = (rutina_doc.get("objetivo") or "").strip()
 
     # Banner motivacional (solo deportista) con racha de SEMANAS
     if rol == "deportista":
@@ -1790,6 +1815,24 @@ def ver_rutinas():
     if not dia_sel and qp_dia:
         dia_sel = str(qp_dia)
         st.session_state["dia_sel"] = dia_sel
+
+    if objetivo_placeholder:
+        objetivo_placeholder.empty()
+        if dia_sel and objetivo_texto:
+            objetivo_html = html.escape(objetivo_texto).replace("\n", "<br>")
+            objetivo_placeholder.markdown(
+                f"""
+                <div class='card' style='margin-top:10px; border:1px dashed rgba(226,94,80,0.35); background:rgba(226,94,80,0.08); padding:14px; border-radius:14px;'>
+                    <div style='font-size:0.78rem; text-transform:uppercase; letter-spacing:0.08em; font-weight:700; color:rgba(226,94,80,0.95);'>
+                        Objetivo de la rutina
+                    </div>
+                    <div style='margin-top:6px; font-size:0.95rem; color:var(--text-main); text-align:left;'>
+                        {objetivo_html}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
     _sync_rutinas_query_params(cliente_sel, semana_sel, dia_sel)
 
