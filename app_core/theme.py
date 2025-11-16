@@ -477,6 +477,22 @@ button.video-cta,
 @media (max-width: 1023px) {{
   .nav-desktop {{ display:none; }}
 }}
+
+/* === TOP SET BLOCK === */
+.topset-card {{
+  text-align: center;
+  margin: 12px auto 0;
+  width: min(520px, 100%);
+}}
+.topset-card__title {{
+  text-align: center;
+  font-weight: 700;
+  margin-bottom: 4px;
+}}
+.topset-line {{
+  text-align: center;
+  margin: 2px 0;
+}}
 </style>
 """
     st.markdown(css, unsafe_allow_html=True)
