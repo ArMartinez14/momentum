@@ -500,7 +500,6 @@ def guardar_rutina(
                         base_reps_max   = _f(ejercicio.get("RepsMax", ""))
                         base_rir_min    = _f(ejercicio.get("RirMin", ""))
                         base_rir_max    = _f(ejercicio.get("RirMax", ""))
-                        base_pct_obj    = _f(ejercicio.get("Porcentaje", ""))
 
                         # Fallbacks por compatibilidad (formatos antiguos):
                         # - Si viene 'Repeticiones' como '8-10' o '10', parsea a RepsMin/RepsMax
@@ -649,8 +648,6 @@ def guardar_rutina(
                             "tipo":       tipo,
                             "video":      video_link
                         }
-                        if base_pct_obj is not None:
-                            registro_ejercicio["porcentaje_objetivo"] = base_pct_obj
                         if top_sets_clean:
                             registro_ejercicio["TopSetData"] = top_sets_clean
 

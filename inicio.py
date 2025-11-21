@@ -1,39 +1,18 @@
 # inicio_deportista.py — Inicio para deportista o entrenador (vista dual)
 
 from __future__ import annotations
-import sys
-from pathlib import Path
 import streamlit as st
 from datetime import datetime, timedelta
 from collections import defaultdict
 from functools import partial
-
-# Asegura que la carpeta raíz, su padre y app_core estén en sys.path
-ROOT_DIR = Path(__file__).resolve().parent
-EXTRA_PATHS = [
-    ROOT_DIR,
-    ROOT_DIR.parent,
-    ROOT_DIR / "app_core",
-]
-for extra in EXTRA_PATHS:
-    extra_str = str(extra)
-    if extra_str not in sys.path:
-        sys.path.insert(0, extra_str)
 
 from motivacional import mensaje_motivador_del_dia
 from app_core.firebase_client import get_db
 from app_core.theme import inject_theme
 from app_core.users_service import get_users_map
 
-# Constante usada por appasesoria / navegación
-SEGUIMIENTO_LABEL = "Seguimiento (Entre Evaluaciones)"
-
 # ======== Estilos (tema unificado) ========
-# Proteger la inyección de tema ante importaciones fuera de Streamlit
-try:
-    inject_theme()
-except Exception:
-    pass
+inject_theme()
 st.markdown(
     """
     <style>
@@ -312,6 +291,8 @@ def _bloque_progress_para_cliente(r_docs: list[dict]) -> tuple[int | None, int |
 
     sem_act, total, ultima = semana_actual_en_bloque(fechas_bloque)
     return sem_act, total, ultima
+
+SEGUIMIENTO_LABEL = "Seguimiento (Entre Evaluaciones)"
 
 _ACCIONES_INICIO = [
     {

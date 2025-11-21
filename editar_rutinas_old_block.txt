@@ -1,0 +1,190 @@
+    with st.form(f"form_{key_seccion}", clear_on_submit=False):
+        header_cols = st.columns(sizes)
+        for c, title in zip(header_cols, headers):
+            c.markdown(f"<div class='header-center'>{title}</div>", unsafe_allow_html=True)
+
+        filas_marcadas: list[tuple[int, str]] = []
+        pos = {header: idx for idx, header in enumerate(headers)}
+
+        for idx, fila in enumerate(st.session_state[key_seccion]):
+            key_entrenamiento = f"{i}_{seccion.replace(' ', '_')}_{idx}"
+            cols = st.columns(sizes)
+
+            fila.setdefault("Sección", seccion)
+            fila["Circuito"] = cols[pos["Circuito"]].selectbox(
+                "",
+                get_circuit_options(seccion),
+                index=(get_circuit_options(seccion).index(fila.get("Circuito")) if fila.get("Circuito") in get_circuit_options(seccion) else 0),
+                key=f"circ_{key_entrenamiento}",
+                label_visibility="collapsed",
+            )
+
+            palabra = cols[pos["Buscar Ejercicio"]].text_input(
+                "",
+                value=fila.get("BuscarEjercicio", ""),
+                key=f"buscar_{key_entrenamiento}",
+                label_visibility="collapsed",
+                placeholder="Buscar ejercicio…",
+            )
+            fila["BuscarEjercicio"] = palabra
+
+            nombre_original = (fila.get("Ejercicio", "") or "").strip()
+            exacto = bool(fila.get("_exact_on_load"))
+            if exacto and normalizar_texto(palabra) in ("", normalizar_texto(nombre_original)):
+                resultados = [nombre_original] if nombre_original else []
+            else:
+                resultados = _buscar_fuzzy(palabra)
+                fila["_exact_on_load"] = False
+            if not resultados and nombre_original:
+                resultados = [nombre_original]
+            if not resultados and palabra.strip():
+                resultados = [palabra.strip()]
+            if not resultados:
+                resultados = ["(sin resultados)"]
+
+            seleccionado = cols[pos["Ejercicio"]].selectbox(
+                "",
+                resultados,
+                key=f"select_{key_entrenamiento}",
+                label_visibility="collapsed",
+            )
+            if seleccionado == "(sin resultados)":
+                fila["Ejercicio"] = palabra.strip()
+            else:
+                fila["Ejercicio"] = seleccionado
+            fila["Video"] = fila.get("Video") or _video_de_catalogo(fila["Ejercicio"])
+
+            fila["Detalle"] = cols[pos["Detalle"]].text_input(
+                "",
+                value=fila.get("Detalle", ""),
+                key=f"det_{key_entrenamiento}",
+                label_visibility="collapsed",
+                placeholder="Notas (opcional)",
+            )
+
+            fila["Series"] = cols[pos["Series"]].text_input(
+                "",
+                value=fila.get("Series", ""),
+                key=f"ser_{key_entrenamiento}",
+                label_visibility="collapsed",
+                placeholder="N°",
+            )
+
+            reps_cols = cols[pos["Repeticiones"]].columns(2)
+            fila["RepsMin"] = reps_cols[0].text_input(
+                "",
+                value=str(fila.get("RepsMin", "")),
+                key=f"rmin_{key_entrenamiento}",
+                label_visibility="collapsed",
+                placeholder="Min",
+            )
+            fila["RepsMax"] = reps_cols[1].text_input(
+                "",
+                value=str(fila.get("RepsMax", "")),
+                key=f"rmax_{key_entrenamiento}",
+                label_visibility="collapsed",
+                placeholder="Max",
+            )
+
+            peso_widget = f"peso_{key_entrenamiento}"
+            peso_valor = fila.get("Peso", "")
+            usar_text_input = True
+            pesos_disponibles = []
+            try:
+                doc_ej = ejercicios_dict.get(fila.get("Ejercicio"), {}) or {}
+                id_impl = str(doc_ej.get("id_implemento") or "")
+                if id_impl and id_impl != "1" and id_impl in IMPLEMENTOS:
+                    pesos_disponibles = IMPLEMENTOS[id_impl].get("pesos", []) or []
+                    if isinstance(pesos_disponibles, dict):
+                        pesos_disponibles = [v for _, v in sorted(pesos_disponibles.items(), key=lambda kv: int(kv[0]))]
+                    usar_text_input = not bool(pesos_disponibles)
+            except Exception:
+                usar_text_input = True
+
+            if not usar_text_input and pesos_disponibles:
+                opciones_peso = [str(p) for p in pesos_disponibles]
+                if str(peso_valor) not in opciones_peso:
+                    peso_valor = opciones_peso[0]
+                fila["Peso"] = cols[pos["Peso"]].selectbox(
+                    "",
+                    options=opciones_peso,
+                    index=(opciones_peso.index(str(peso_valor)) if str(peso_valor) in opciones_peso else 0),
+                    key=peso_widget,
+                    label_visibility="collapsed",
+                )
+            else:
+                fila["Peso"] = cols[pos["Peso"]].text_input(
+                    "",
+                    value=str(peso_valor),
+                    key=peso_widget,
+                    label_visibility="collapsed",
+                    placeholder="Kg",
+                )
+
+            if "Tiempo" in pos:
+                fila["Tiempo"] = cols[pos["Tiempo"]].text_input(
+                    "",
+                    value=str(fila.get("Tiempo", "")),
+                    key=f"tiempo_{key_entrenamiento}",
+                    label_visibility="collapsed",
+                    placeholder="Seg",
+                )
+            else:
+                fila.setdefault("Tiempo", "")
+
+            if "Velocidad" in pos:
+                fila["Velocidad"] = cols[pos["Velocidad"]].text_input(
+                    "",
+                    value=str(fila.get("Velocidad", "")),
+                    key=f"vel_{key_entrenamiento}",
+                    label_visibility="collapsed",
+                    placeholder="m/s",
+                )
+            else:
+                fila.setdefault("Velocidad", "")
+
+            if "Descanso" in pos:
+                opciones_descanso = ["", "1", "2", "3", "4", "5"]
+                valor_desc = str(fila.get("Descanso", "")).split(" ")[0]
+                idx_desc = opciones_descanso.index(valor_desc) if valor_desc in opciones_descanso else 0
+                fila["Descanso"] = cols[pos["Descanso"]].selectbox(
+                    "",
+                    options=opciones_descanso,
+                    index=idx_desc,
+                    key=f"desc_{key_entrenamiento}",
+                    label_visibility="collapsed",
+                    help="Minutos de descanso (1–5). Deja vacío si no aplica.",
+                )
+            else:
+                fila.setdefault("Descanso", "")
+
+            rir_cols = cols[pos["RIR (Min/Max)"]].columns(2)
+            fila["RirMin"] = rir_cols[0].text_input(
+                "",
+                value=str(fila.get("RirMin", "")),
+                key=f"rirmin_{key_entrenamiento}",
+                label_visibility="collapsed",
+                placeholder="Min",
+            )
+            fila["RirMax"] = rir_cols[1].text_input(
+                "",
+                value=str(fila.get("RirMax", "")),
+                key=f"rirmax_{key_entrenamiento}",
+                label_visibility="collapsed",
+                placeholder="Max",
+            )
+            rmin_txt, rmax_txt = str(fila.get("RirMin", "")).strip(), str(fila.get("RirMax", "")).strip()
+            fila["RIR"] = f"{rmin_txt}-{rmax_txt}" if (rmin_txt and rmax_txt) else (rmin_txt or rmax_txt or "")
+
+            prog_cols = cols[pos["Progresión"]].columns([1, 1, 1])
+            mostrar_progresion = prog_cols[1].checkbox("", key=f"prog_check_{key_entrenamiento}_{idx}")
+
+            copy_cols = cols[pos["Copiar"]].columns([1, 1, 1])
+            mostrar_copia = copy_cols[1].checkbox("", key=f"copy_check_{key_entrenamiento}_{idx}")
+
+            if "Video?" in pos:
+                nombre_ej = str(fila.get("Ejercicio", "")).strip()
+                has_video = bool((fila.get("Video") or "").strip() or _video_de_catalogo(nombre_ej))
+                cols[pos["Video?"]].checkbox("", value=has_video, disabled=True, key=f"video_flag_{i}_{seccion}_{idx}")
+
+        st.form_submit_button("Actualizar sección", type="primary")

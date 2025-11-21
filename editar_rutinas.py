@@ -1529,7 +1529,6 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                 resultados = ["(sin resultados)"]
 
             nombre_actual = (fila.get("Ejercicio", "") or "").strip()
-            video_actual = (fila.get("Video") or "").strip()
             if nombre_actual:
                 vistos = set()
                 resultados = [r for r in resultados if not (r in vistos or vistos.add(r))]
@@ -1545,16 +1544,10 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                 index=idx_sel,
             )
             if seleccionado == "(sin resultados)":
-                nuevo_nombre = palabra.strip()
+                fila["Ejercicio"] = palabra.strip()
             else:
-                nuevo_nombre = seleccionado
-            cambio_ejercicio = normalizar_texto(nuevo_nombre) != normalizar_texto(nombre_original)
-            fila["Ejercicio"] = nuevo_nombre
-            if cambio_ejercicio:
-                # Si cambió el ejercicio, sincroniza el video con el nuevo catálogo
-                fila["Video"] = _video_de_catalogo(nuevo_nombre) or ""
-            elif not video_actual:
-                fila["Video"] = _video_de_catalogo(nuevo_nombre) or ""
+                fila["Ejercicio"] = seleccionado
+            fila["Video"] = fila.get("Video") or _video_de_catalogo(fila["Ejercicio"])
 
             fila["Detalle"] = cols[pos["Detalle"]].text_input(
                 "",
