@@ -1,10 +1,19 @@
 # inicio_deportista.py — Inicio para deportista o entrenador (vista dual)
 
 from __future__ import annotations
+import sys
+from pathlib import Path
 import streamlit as st
 from datetime import datetime, timedelta
 from collections import defaultdict
 from functools import partial
+
+# Asegura que la carpeta raíz y app_core estén en sys.path
+ROOT_DIR = Path(__file__).resolve().parent
+for extra in (ROOT_DIR, ROOT_DIR / "app_core"):
+    extra_str = str(extra)
+    if extra_str not in sys.path:
+        sys.path.insert(0, extra_str)
 
 from motivacional import mensaje_motivador_del_dia
 from app_core.firebase_client import get_db
