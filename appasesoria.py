@@ -4,9 +4,14 @@ import sys
 from pathlib import Path
 import streamlit as st
 
-# Asegura que el directorio raíz y app_core estén en sys.path cuando se ejecuta desde Streamlit Cloud
+# Asegura que el proyecto esté en sys.path (raíz, app_core y padre)
 ROOT_DIR = Path(__file__).resolve().parent
-for extra in (ROOT_DIR, ROOT_DIR / "app_core"):
+EXTRA_PATHS = [
+    ROOT_DIR,
+    ROOT_DIR.parent,
+    ROOT_DIR / "app_core",
+]
+for extra in EXTRA_PATHS:
     extra_str = str(extra)
     if extra_str not in sys.path:
         sys.path.insert(0, extra_str)
