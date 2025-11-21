@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import time
 from app_core.firebase_client import get_db
 from app_core.theme import inject_theme
+from app_core.users_service import get_users_map
 from app_core.utils import empresa_de_usuario, EMPRESA_MOTION, EMPRESA_ASESORIA, EMPRESA_DESCONOCIDA
 from app_core.video_utils import normalizar_link_youtube
 
@@ -1324,6 +1325,26 @@ def ver_rutinas():
         docs = db.collection("rutinas_semanales").stream()
         return [doc.to_dict() for doc in docs]
 
+    @st.cache_data(show_spinner=False, ttl=120, max_entries=512)
+    def cargar_rutinas_por_correo(correo_objetivo: str) -> list[dict]:
+        correo_objetivo = (correo_objetivo or "").strip().lower()
+        if not correo_objetivo:
+            return []
+        try:
+            docs = (
+                db.collection("rutinas_semanales")
+                  .where("correo", "==", correo_objetivo)
+                  .stream()
+            )
+        except Exception:
+            return []
+        resultados: list[dict] = []
+        for doc in docs:
+            if not doc.exists:
+                continue
+            resultados.append(doc.to_dict())
+        return resultados
+
     # Usuario
     correo_raw = (st.session_state.get("correo","") or "").strip().lower()
     if not correo_raw: st.error("❌ No hay correo registrado."); st.stop()
@@ -1341,9 +1362,16 @@ def ver_rutinas():
         unsafe_allow_html=True,
     )
 
-    # Cargar todas y filtrar por cliente según rol
-    rutinas_all = cargar_todas_las_rutinas()
-    if not rutinas_all: st.warning("⚠️ No se encontraron rutinas."); st.stop()
+    # Cargar rutinas según alcance del usuario para evitar escanear toda la colección
+    if es_entrenador(rol):
+        rutinas_all = cargar_todas_las_rutinas()
+    else:
+        rutinas_all = cargar_rutinas_por_correo(correo_raw)
+        if not rutinas_all and correo_norm != correo_raw:
+            rutinas_all = cargar_rutinas_por_correo(correo_norm)
+    if not rutinas_all:
+        st.warning("⚠️ No se encontraron rutinas.");
+        st.stop()
 
     qp_values = _current_query_params()
     qp_cliente = qp_values.get("cliente")
@@ -1355,23 +1383,7 @@ def ver_rutinas():
     if es_entrenador(rol):
         rol_lower = rol.strip().lower()
 
-        @st.cache_data(show_spinner=False, ttl=300, max_entries=256)
-        def _usuarios_por_correo():
-            mapping = {}
-            try:
-                for snap in db.collection("usuarios").stream():
-                    if not snap.exists:
-                        continue
-                    data = snap.to_dict() or {}
-                    correo_cli = (data.get("correo") or "").strip().lower()
-                    if correo_cli:
-                        mapping[correo_cli] = data
-                        mapping[normalizar_correo(correo_cli)] = data
-            except Exception:
-                pass
-            return mapping
-
-        usuarios_por_correo = _usuarios_por_correo()
+        usuarios_por_correo = get_users_map()
         def _cliente_es_activo(correo_cliente: str) -> bool:
             if not correo_cliente:
                 return True
@@ -1519,6 +1531,11 @@ def ver_rutinas():
 
         busqueda = st.text_input("Busca deportista", key="cliente_input", placeholder="Escribe un nombre…")
         busqueda_lower = busqueda.lower()
+        busqueda_prev = st.session_state.get("_busqueda_cliente", "")
+        if busqueda != busqueda_prev:
+            st.session_state["_busqueda_cliente"] = busqueda
+            if busqueda:
+                st.session_state["_mostrar_lista_clientes"] = True
         clientes_asignados = clientes_tarjetas
 
         if clientes_tarjetas:
@@ -1546,9 +1563,6 @@ def ver_rutinas():
 
         if st.session_state.get("_cliente_sel") not in clientes_empresa_info:
             st.session_state.pop("_cliente_sel", None)
-            st.session_state["_mostrar_lista_clientes"] = True
-
-        if busqueda:
             st.session_state["_mostrar_lista_clientes"] = True
 
         if not st.session_state.get("_cliente_sel") and qp_cliente and qp_cliente in clientes_empresa_info:
