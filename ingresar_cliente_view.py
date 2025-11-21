@@ -12,7 +12,6 @@ from datetime import datetime
 # 👇 servicio de catálogos (tuyo)
 from servicio_catalogos import get_catalogos, add_item
 from app_core.utils import empresa_de_usuario, EMPRESA_MOTION, EMPRESA_ASESORIA, EMPRESA_DESCONOCIDA
-from app_core.email_notifications import enviar_correo_bienvenida
 
 # ==========================
 # 🎨 PALETA / ESTILOS (solo UI)
@@ -279,13 +278,9 @@ def _render_menu():
             _set_mode("ejercicio"); st.rerun()
 
     with colC:
-        if es_admin():
-            if st.button(
-                "📤\n### Importar Ejercicios\nCarga un archivo CSV para crear ejercicios.",
-                key="card_carga",
-                use_container_width=True,
-            ):
-                _set_mode("carga_csv"); st.rerun()
+        if st.button("📤\n### Importar Ejercicios\nCarga un archivo CSV para crear ejercicios.",
+                     key="card_carga", use_container_width=True):
+            _set_mode("carga_csv"); st.rerun()
 
     # 🔥 estilos para que parezcan tarjetas
     st.markdown(f"""
@@ -325,11 +320,7 @@ def _render_cliente():
 
     st.markdown("<div class='muted'>Completa los datos básicos del cliente. El nombre y correo son obligatorios.</div>", unsafe_allow_html=True)
 
-    col_nombre, col_apellido = st.columns(2, gap="small")
-    with col_nombre:
-        nombre_cliente = st.text_input("Nombre", placeholder="Ej.: María")
-    with col_apellido:
-        apellido_cliente = st.text_input("Apellido", placeholder="Ej.: Fernández")
+    nombre = st.text_input("Nombre", placeholder="Ej.: María Fernández")
 
     if "correo_cliente_nuevo" in st.session_state:
         st.session_state["correo_cliente_nuevo"] = normalizar_correo(st.session_state["correo_cliente_nuevo"])
@@ -403,27 +394,13 @@ def _render_cliente():
         else:
             st.caption("Este usuario se registrará sin empresa asignada.")
 
-    solicitar_anamnesis = False
-    if rol == "deportista":
-        solicitar_anamnesis = st.checkbox(
-            "Solicitar anamnesis inicial",
-            value=True,
-            help="Si está activo, el deportista deberá completar la anamnesis antes de usar la app."
-        )
-
     st.markdown("<hr class='hr-light'>", unsafe_allow_html=True)
 
     cols_btn = st.columns([1,3])
     with cols_btn[0]:
         if st.button("Guardar Cliente", type="primary", use_container_width=True):
-            nombre_clean = nombre_cliente.strip()
-            apellido_clean = apellido_cliente.strip()
-            if not nombre_clean:
+            if not nombre.strip():
                 st.warning("⚠️ Ingresa el nombre.")
-                st.markdown("</div>", unsafe_allow_html=True)
-                return
-            if not apellido_clean:
-                st.warning("⚠️ Ingresa el apellido.")
                 st.markdown("</div>", unsafe_allow_html=True)
                 return
 
@@ -450,15 +427,12 @@ def _render_cliente():
                 return
 
             doc_id = normalizar_id(correo_limpio)
-            nombre_completo = " ".join(part for part in [nombre_clean, apellido_clean] if part)
-
             data = {
-                "nombre": nombre_completo,
+                "nombre": nombre.strip(),
                 "correo": correo_limpio,
                 "rol": rol,
                 "creado_en": datetime.utcnow(),
                 "empresa": empresa_seleccionada or EMPRESA_DESCONOCIDA,
-                "requiere_anamnesis": bool(solicitar_anamnesis) if rol == "deportista" else False,
             }
 
             if rol == "deportista":
@@ -470,24 +444,7 @@ def _render_cliente():
 
             try:
                 db.collection("usuarios").document(doc_id).set(data)
-                st.success(f"✅ Cliente '{nombre_completo}' guardado correctamente")
-                try:
-                    empresa_coach = empresa_de_usuario(coach_responsable)
-                    if not (empresa_seleccionada == EMPRESA_MOTION and empresa_coach == EMPRESA_MOTION):
-                        envio_ok = enviar_correo_bienvenida(
-                            correo=correo_limpio,
-                            nombre=nombre_completo,
-                            empresa=empresa_seleccionada,
-                            rol=rol,
-                        )
-                        if envio_ok:
-                            st.caption("Se envió un correo de bienvenida con instrucciones de acceso.")
-                        else:
-                            st.caption("No se pudo enviar el correo de bienvenida; revisa la configuración de notificaciones.")
-                    else:
-                        st.caption("Cliente creado sin correo de bienvenida (política Motion).")
-                except Exception as exc_envio:
-                    st.caption(f"Cliente creado, pero falló el envío de bienvenida: {exc_envio}")
+                st.success(f"✅ Cliente '{nombre.strip()}' guardado correctamente")
             except Exception as e:
                 st.error(f"❌ Error al guardar: {e}")
     st.markdown("</div>", unsafe_allow_html=True)
@@ -685,9 +642,8 @@ def _render_carga_csv():
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown("<h4 class='h-accent'>📤 Importar ejercicios desde archivo</h4>", unsafe_allow_html=True)
     st.caption(
-        "El CSV puede incluir columnas como **Detalle**, **Caracteristica**, **Patron de Movimiento**,"
-        " **Marca**, **Maquina**, **Grupo Muscular Principal/Secundario**, `Publico`, entre otras."
-        " Cualquier columna faltante se dejará vacía automáticamente."
+        "El CSV debe incluir las columnas **Detalle**, **Caracteristica** y **Patron de Movimiento** (obligatorias)."
+        " Puedes añadir también **Marca**, **Maquina**, **Grupo Muscular Principal**, **Grupo Muscular Secundario** y opcionalmente `Publico`."
     )
 
     archivo = st.file_uploader("Archivo CSV", type=["csv"], help="Usa codificación UTF-8. Cada fila crea o actualiza un ejercicio.")
@@ -719,6 +675,10 @@ def _render_carga_csv():
 
     admin = es_admin()
     headers_norm = { (h or "").strip().lower(): h for h in (reader.fieldnames or []) }
+    obligatorias = ["detalle", "caracteristica", "patron de movimiento"]
+    faltantes = [nombre for nombre in obligatorias if nombre not in headers_norm]
+    if faltantes:
+        st.warning("Faltan columnas obligatorias en el CSV: " + ", ".join(sorted(faltantes)))
 
     if st.button("Importar ejercicios", type="primary", key="btn_importar_csv"):
         guardados = 0
@@ -735,27 +695,20 @@ def _render_carga_csv():
                 maquina = _val("maquina")
                 detalle = _val("detalle")
                 caracteristica = _val("caracteristica")
-                patron = _val("patron de movimiento", "patron_de_movimiento", "patron")
-                grupo_p = _val("grupo muscular principal", "grupo_muscular_principal")
-                grupo_s = _val("grupo muscular secundario", "grupo_muscular_secundario")
-                video = _val("video", "link_video", "url_video", "youtube", "link")
-                entrenador_csv = _val("entrenador", "coach")
-                creado_por_csv = _val("creado_por", "creado por", "created_by")
+                patron = _val("patron de movimiento")
+                grupo_p = _val("grupo muscular principal")
+                grupo_s = _val("grupo muscular secundario")
 
-                nombre = _val("nombre")
+                if not (detalle and caracteristica and patron):
+                    raise ValueError("faltan datos clave (detalle, característica o patrón)")
+
+                nombre = (row.get("nombre") or "").strip()
                 if not nombre:
                     nombre = " ".join(filter(None, [marca, maquina, detalle])).strip()
                 if not nombre:
-                    nombre = f"ejercicio_{idx}"
+                    raise ValueError("nombre vacío")
 
-                if not detalle:
-                    detalle = nombre
-                if not caracteristica:
-                    caracteristica = "Sin especificar"
-                if not patron:
-                    patron = "Sin especificar"
-
-                publico_raw = _val("publico", "publico_flag")
+                publico_raw = _val("publico")
                 publico_raw = publico_raw.lower()
                 publico = publico_raw in {"1", "true", "si", "sí", "publico", "public", "yes"}
                 if not admin:
@@ -763,11 +716,6 @@ def _render_carga_csv():
 
                 id_impl = _resolver_id_implemento(db, marca, maquina)
                 doc_id = normalizar_texto(nombre)
-
-                entrenador_final = (entrenador_csv or creado_por_csv or correo_usuario).strip().lower()
-                if not entrenador_final:
-                    entrenador_final = correo_usuario
-                creado_por_final = (creado_por_csv or entrenador_final or correo_usuario).strip().lower()
 
                 payload = {
                     "nombre": nombre,
@@ -782,14 +730,12 @@ def _render_carga_csv():
                     "publico": bool(publico),
                     "actualizado_por": correo_usuario,
                     "fecha_actualizacion": datetime.utcnow(),
-                    "entrenador": entrenador_final,
+                    "entrenador": correo_usuario,
                 }
-                if video:
-                    payload["video"] = video
 
                 db.collection("ejercicios").document(doc_id).set({
                     **payload,
-                    "creado_por": creado_por_final,
+                    "creado_por": correo_usuario,
                     "fecha_creacion": datetime.utcnow(),
                 }, merge=True)
                 guardados += 1
@@ -815,11 +761,7 @@ def ingresar_cliente_o_video_o_ejercicio():
     elif mode == "ejercicio":
         _render_ejercicio()
     elif mode == "carga_csv":
-        if es_admin():
-            _render_carga_csv()
-        else:
-            st.error("Solo los administradores pueden importar ejercicios masivamente.")
-            _set_mode("menu")
+        _render_carga_csv()
     else:
         _set_mode("menu"); _render_menu()
 

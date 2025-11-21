@@ -797,7 +797,7 @@ def _buscar_videos_inconsistentes(db, doc_data: dict) -> list[dict]:
     rutina_actual = doc_data.get("rutina", {}) or {}
     if not isinstance(rutina_actual, dict):
         return []
-    correo_entrenador = (doc_data.get("entrenador") or "").strip().lower()
+    correo_entrenador = correo_actual() or (doc_data.get("entrenador") or "").strip().lower()
     pendientes: list[dict] = []
     for dia, ejercicios in rutina_actual.items():
         for ejercicio in _iterar_ejercicios_en_obj(ejercicios):
@@ -1529,6 +1529,7 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                 resultados = ["(sin resultados)"]
 
             nombre_actual = (fila.get("Ejercicio", "") or "").strip()
+            video_actual = (fila.get("Video") or "").strip()
             if nombre_actual:
                 vistos = set()
                 resultados = [r for r in resultados if not (r in vistos or vistos.add(r))]
@@ -1544,10 +1545,16 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                 index=idx_sel,
             )
             if seleccionado == "(sin resultados)":
-                fila["Ejercicio"] = palabra.strip()
+                nuevo_nombre = palabra.strip()
             else:
-                fila["Ejercicio"] = seleccionado
-            fila["Video"] = fila.get("Video") or _video_de_catalogo(fila["Ejercicio"])
+                nuevo_nombre = seleccionado
+            cambio_ejercicio = normalizar_texto(nuevo_nombre) != normalizar_texto(nombre_original)
+            fila["Ejercicio"] = nuevo_nombre
+            if cambio_ejercicio:
+                # Si cambió el ejercicio, sincroniza el video con el nuevo catálogo
+                fila["Video"] = _video_de_catalogo(nuevo_nombre) or ""
+            elif not video_actual:
+                fila["Video"] = _video_de_catalogo(nuevo_nombre) or ""
 
             fila["Detalle"] = cols[pos["Detalle"]].text_input(
                 "",
