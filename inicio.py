@@ -9,9 +9,17 @@ from functools import partial
 from motivacional import mensaje_motivador_del_dia
 from app_core.firebase_client import get_db
 from app_core.theme import inject_theme
+from app_core.users_service import get_users_map
+
+# Constante usada por appasesoria / navegación
+SEGUIMIENTO_LABEL = "Seguimiento (Entre Evaluaciones)"
 
 # ======== Estilos (tema unificado) ========
-inject_theme()
+# Proteger la inyección de tema ante importaciones fuera de Streamlit
+try:
+    inject_theme()
+except Exception:
+    pass
 st.markdown(
     """
     <style>
@@ -146,23 +154,6 @@ def _rutinas_asignadas_a_entrenador(_db, correo_entrenador: str):
         except: pass
     return out
 
-
-@st.cache_data(show_spinner=False, ttl=300, max_entries=256)
-def _usuarios_por_correo():
-    mapping = {}
-    try:
-        db_local = get_db()
-        for snap in db_local.collection("usuarios").stream():
-            if not snap.exists:
-                continue
-            data = snap.to_dict() or {}
-            correo_cli = (data.get("correo") or "").strip().lower()
-            if correo_cli:
-                mapping[correo_cli] = data
-                mapping[_norm_mail(correo_cli)] = data
-    except Exception:
-        pass
-    return mapping
 
 def _doc_id_from_mail(mail: str) -> str:
     return mail.replace('@','_').replace('.','_')
@@ -308,8 +299,6 @@ def _bloque_progress_para_cliente(r_docs: list[dict]) -> tuple[int | None, int |
     sem_act, total, ultima = semana_actual_en_bloque(fechas_bloque)
     return sem_act, total, ultima
 
-SEGUIMIENTO_LABEL = "Seguimiento (Entre Evaluaciones)"
-
 _ACCIONES_INICIO = [
     {
         "id": "ver_rutinas",
@@ -417,7 +406,7 @@ def inicio_deportista():
         st.markdown("---")
 
         # 3) Deportistas a mi cargo (entrenador == mi correo)
-        usuarios_por_correo = _usuarios_por_correo()
+        usuarios_por_correo = get_users_map()
 
         def _cliente_es_activo(correo_cli: str) -> bool:
             if not correo_cli:
