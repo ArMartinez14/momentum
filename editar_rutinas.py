@@ -1026,6 +1026,82 @@ def _series_data_con_datos(series_data) -> bool:
     return False
 
 
+def _valor_reporte_txt(valor) -> str:
+    if valor in (None, "", []):
+        return ""
+    return str(valor).strip()
+
+
+def _serie_reporte_txt(idx: int, serie: dict) -> str:
+    if not isinstance(serie, dict):
+        return ""
+    partes = []
+    for campo, etiqueta in (("reps", "Reps"), ("peso", "Peso"), ("rir", "RIR")):
+        txt = _valor_reporte_txt(serie.get(campo))
+        if txt:
+            partes.append(f"{etiqueta}: {txt}")
+    if not partes:
+        return ""
+    return f"Serie {idx}: " + " · ".join(partes)
+
+
+def _extraer_reportes_semana(doc_semana: dict, dia_clave: str) -> list[dict]:
+    rutina = (doc_semana or {}).get("rutina") or {}
+    data_dia = _obtener_data_dia(rutina, str(dia_clave))
+    ejercicios = obtener_lista_ejercicios(data_dia)
+    reportes: list[dict] = []
+    for ex in ejercicios:
+        if not isinstance(ex, dict):
+            continue
+        if not (_series_data_con_datos(ex.get("series_data")) or any(_valor_reporte_txt(ex.get(k)) for k in ("reps_alcanzadas", "peso_alcanzado", "rir_alcanzado", "comentario"))):
+            continue
+        nombre = (ex.get("Ejercicio") or ex.get("ejercicio") or "").strip() or "Ejercicio sin nombre"
+        circuito = (ex.get("Circuito") or ex.get("circuito") or "").strip()
+        bloque = (ex.get("Sección") or ex.get("seccion") or ex.get("bloque") or "").strip()
+        series_txt = [
+            _serie_reporte_txt(i + 1, s)
+            for i, s in enumerate(ex.get("series_data") or [])
+            if _serie_reporte_txt(i + 1, s)
+        ]
+        resumen_campos = [f"{lbl}: {_valor_reporte_txt(ex.get(campo))}" for campo, lbl in (("reps_alcanzadas", "Reps"), ("peso_alcanzado", "Peso"), ("rir_alcanzado", "RIR")) if _valor_reporte_txt(ex.get(campo))]
+        comentario = _valor_reporte_txt(ex.get("comentario"))
+        reportes.append(
+            {
+                "nombre": nombre,
+                "circuito": circuito,
+                "bloque": bloque,
+                "series": series_txt,
+                "resumen": " · ".join(resumen_campos),
+                "comentario": comentario,
+            }
+        )
+    return reportes
+
+
+def _render_reporte_semana_anterior(data_semana: dict, dia_clave: str, semana_label: str):
+    st.markdown(f"**Semana {semana_label} · Día {dia_clave}**")
+    reportes_prev = _extraer_reportes_semana(data_semana, dia_clave)
+    if not reportes_prev:
+        st.caption("No hay reportes guardados para ese día en la semana anterior.")
+        return
+    for rep in reportes_prev:
+        titulo_bits = []
+        if rep.get("bloque"):
+            titulo_bits.append(rep["bloque"])
+        if rep.get("circuito"):
+            titulo_bits.append(f"Circuito {rep['circuito']}")
+        titulo_bits.append(rep.get("nombre", "Ejercicio"))
+        st.markdown(" · ".join(titulo_bits))
+        if rep.get("series"):
+            for linea in rep["series"]:
+                st.markdown(f"- {linea}")
+        if rep.get("resumen"):
+            st.markdown(f"- {rep['resumen']}")
+        if rep.get("comentario"):
+            st.caption(f"💬 {rep['comentario']}")
+        st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+
+
 def _copiar_datos_reporte(origen: dict, destino: dict) -> None:
     if not isinstance(origen, dict) or not isinstance(destino, dict):
         return
@@ -1145,6 +1221,41 @@ def _agregar_dia():
     st.session_state["dias_originales"] = nuevas.copy()
     _asegurar_dia_en_session(nuevo_idx)
     st.session_state["_dia_creado_msg"] = f"Día {nuevo_idx} agregado. Completa sus ejercicios y guarda los cambios."
+    _trigger_rerun()
+
+
+def _snapshot_dias_en_session() -> dict[str, dict]:
+    dias = st.session_state.get("dias_editables") or []
+    snapshot: dict[str, dict] = {}
+    for idx, dia in enumerate(dias, start=1):
+        snapshot[str(dia)] = {
+            "warm": copy.deepcopy(st.session_state.get(f"rutina_dia_{idx}_Warm_Up", [])),
+            "work": copy.deepcopy(st.session_state.get(f"rutina_dia_{idx}_Work_Out", [])),
+            "cardio": copy.deepcopy(st.session_state.get(f"rutina_dia_{idx}_Cardio", {})),
+        }
+    return snapshot
+
+
+def _borrar_dia(idx_tab: int):
+    dias = st.session_state.get("dias_editables") or []
+    if len(dias) <= 1:
+        st.warning("Debe existir al menos un día en la rutina.")
+        return
+    if idx_tab < 0 or idx_tab >= len(dias):
+        return
+    snapshot = _snapshot_dias_en_session()
+    dia_eliminado = dias[idx_tab]
+    dias_nuevos = [d for i, d in enumerate(dias) if i != idx_tab]
+    _limpiar_estado_rutina()
+    st.session_state["dias_editables"] = dias_nuevos.copy()
+    st.session_state["dias_originales"] = dias_nuevos.copy()
+    for new_idx, dia in enumerate(dias_nuevos, start=1):
+        data = snapshot.get(str(dia)) or {}
+        st.session_state[f"rutina_dia_{new_idx}_Warm_Up"] = data.get("warm", [])
+        st.session_state[f"rutina_dia_{new_idx}_Work_Out"] = data.get("work", [])
+        st.session_state[f"rutina_dia_{new_idx}_Cardio"] = data.get("cardio", _default_cardio_data())
+    st.session_state[RUTINA_STATE_OWNER_KEY] = "editar"
+    st.session_state["_dia_eliminado_msg"] = f"Se eliminó el Día {dia_eliminado}."
     _trigger_rerun()
 
 
@@ -1529,6 +1640,7 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                 resultados = ["(sin resultados)"]
 
             nombre_actual = (fila.get("Ejercicio", "") or "").strip()
+            video_actual = (fila.get("Video") or "").strip()
             if nombre_actual:
                 vistos = set()
                 resultados = [r for r in resultados if not (r in vistos or vistos.add(r))]
@@ -1544,10 +1656,16 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                 index=idx_sel,
             )
             if seleccionado == "(sin resultados)":
-                fila["Ejercicio"] = palabra.strip()
+                nuevo_nombre = palabra.strip()
             else:
-                fila["Ejercicio"] = seleccionado
-            fila["Video"] = fila.get("Video") or _video_de_catalogo(fila["Ejercicio"])
+                nuevo_nombre = seleccionado
+            cambio_ejercicio = normalizar_texto(nuevo_nombre) != normalizar_texto(nombre_original)
+            fila["Ejercicio"] = nuevo_nombre
+            if cambio_ejercicio:
+                # Si cambió el ejercicio, sincroniza el video con el nuevo catálogo
+                fila["Video"] = _video_de_catalogo(nuevo_nombre) or ""
+            elif not video_actual:
+                fila["Video"] = _video_de_catalogo(nuevo_nombre) or ""
 
             fila["Detalle"] = cols[pos["Detalle"]].text_input(
                 "",
@@ -2085,6 +2203,20 @@ def editar_rutinas():
     semana_sel = st.selectbox("Selecciona la semana:", semanas_ordenadas, index=idx_default)
     doc_id_semana = semanas_dict[semana_sel]
     doc_data = datos_cache.get(doc_id_semana) or db.collection("rutinas_semanales").document(doc_id_semana).get().to_dict() or {}
+    semana_anterior = None
+    data_semana_anterior = None
+    if semana_sel in semanas_ordenadas:
+        idx_sem = semanas_ordenadas.index(semana_sel)
+        if idx_sem > 0:
+            semana_anterior = semanas_ordenadas[idx_sem - 1]
+            doc_id_prev = semanas_dict.get(semana_anterior)
+            if doc_id_prev:
+                data_semana_anterior = datos_cache.get(doc_id_prev)
+                if data_semana_anterior is None:
+                    data_semana_anterior = (
+                        db.collection("rutinas_semanales").document(doc_id_prev).get().to_dict() or {}
+                    )
+                    datos_cache[doc_id_prev] = data_semana_anterior
 
     with st.expander("🔍 Revisar videos faltantes"):
         if st.button("Buscar ejercicios sin video", key="btn_buscar_videos"):
@@ -2208,6 +2340,8 @@ def editar_rutinas():
 
     if msg := st.session_state.pop("_dia_creado_msg", None):
         st.info(msg)
+    if msg := st.session_state.pop("_dia_eliminado_msg", None):
+        st.info(msg)
 
     dias_originales = st.session_state.get("dias_editables") or ["1"]
     st.session_state.setdefault("dias_originales", list(dias_originales))
@@ -2235,6 +2369,21 @@ def editar_rutinas():
     tabs = st.tabs(dias_labels)
     for idx, tab in enumerate(tabs):
         with tab:
+            dia_tab = dias_originales[idx] if idx < len(dias_originales) else str(idx + 1)
+            if semana_anterior and data_semana_anterior:
+                pop = st.popover(
+                    f"📊 Reporte semana anterior · Día {dia_tab}",
+                    use_container_width=True,
+                )
+                with pop:
+                    _render_reporte_semana_anterior(data_semana_anterior, dia_tab, semana_anterior)
+            elif idx == 0:
+                st.caption("No hay una semana anterior con reporte para este cliente.")
+            if len(dias_originales) > 1:
+                cols_del = st.columns([5, 1])
+                with cols_del[1]:
+                    if st.button("🗑️ Borrar día", key=f"del_dia_{idx}", type="secondary"):
+                        _borrar_dia(idx)
             render_tabla_dia(idx, "Warm Up", progresion_activa, dias_labels)
             st.markdown(SECTION_BREAK_HTML, unsafe_allow_html=True)
             render_tabla_dia(idx, "Work Out", progresion_activa, dias_labels)

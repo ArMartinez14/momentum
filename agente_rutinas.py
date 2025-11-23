@@ -310,15 +310,33 @@ Genera la recomendación.
 
     client = get_openai_client()
 
-    response = client.responses.create(
-        model="gpt-4o-mini",
-        input=[
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg},
-        ]
-    )
+    def _llamar_openai(client: OpenAI, system: str, user: str) -> str:
+        """
+        Soporta tanto el cliente nuevo (.responses) como el antiguo (.chat.completions).
+        """
+        if hasattr(client, "responses"):
+            resp = client.responses.create(
+                model="gpt-4o-mini",
+                input=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            )
+            return resp.output_text or ""
 
-    raw = response.output_text or ""
+        # fallback para versiones viejas del SDK
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        if resp.choices:
+            return resp.choices[0].message.content or ""
+        return ""
+
+    raw = _llamar_openai(client, system_msg, user_msg)
 
     def _parse_json(texto: str) -> Optional[dict]:
         """

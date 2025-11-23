@@ -4,6 +4,8 @@ import unicodedata
 from datetime import date, timedelta, datetime, timezone
 import pandas as pd
 import uuid
+# Agente de sugerencias de pesos
+from agente_rutinas import agente_sugerencia_rutina
 # Catálogos para caracteristica / patrón / grupo
 from servicio_catalogos import get_catalogos, add_item
 from firebase_admin import firestore
@@ -789,6 +791,7 @@ def _sincronizar_filas_formulario(dias_labels: list[str]):
                     ("rmin", "RepsMin"),
                     ("rmax", "RepsMax"),
                     ("peso", "Peso"),
+                    ("porc", "Porcentaje"),
                     ("tiempo", "Tiempo"),
                     ("desc", "Descanso"),
                     ("rirmin", "RirMin"),
@@ -1091,7 +1094,14 @@ def crear_rutinas():
     nombre_sel = st.selectbox("Selecciona de la lista:", coincidencias) if coincidencias else ""
 
     correo_auto = next((u.get("correo", "") for u in usuarios if u.get("nombre") == nombre_sel), "")
-    correo = st.text_input("Correo del cliente:", value=correo_auto, key="crear_correo_cliente")
+    # Si cambia la selección de nombre, actualiza el correo por defecto
+    prev_nombre = st.session_state.get("_crear_prev_nombre_cliente")
+    if nombre_sel and nombre_sel != prev_nombre and correo_auto:
+        st.session_state["crear_correo_cliente"] = correo_auto
+        st.session_state["_crear_prev_nombre_cliente"] = nombre_sel
+    correo_val_in_state = st.session_state.get("crear_correo_cliente", "")
+    correo_value = correo_val_in_state or correo_auto
+    correo = st.text_input("Correo del cliente:", value=correo_value, key="crear_correo_cliente")
 
     valor_defecto = proximo_lunes()
     sel = st.date_input(
@@ -1321,6 +1331,7 @@ def crear_rutinas():
         "Series",
         "Repeticiones",
         "Peso",
+        "Porcentaje",
         "RIR (Min/Max)",
         "Progresión",
         "Set Mode",
@@ -1328,12 +1339,12 @@ def crear_rutinas():
         "Borrar",
         "Video",
     ]
-    BASE_SIZES = [1.0, 2.5, 2.5, 2.0, 0.7, 1.4, 1.0, 1.4, 1.0, 1.0, 0.6, 0.6, 0.7]  
+    BASE_SIZES = [1.0, 2.5, 2.5, 2.0, 0.7, 1.4, 0.9, 1.0, 1.0, 1.0, 0.6, 0.6, 0.7, 0.6]  
     # 👆 aquí puse 1.6 en RIR para que quepan dos casillas
 
     columnas_tabla = [
         "Circuito", "Sección", "Ejercicio", "Detalle", "Series", "Repeticiones",
-        "Peso", "Tiempo", "Descanso", "RIR", "Tipo", "Video"
+        "Peso", "Porcentaje", "Tiempo", "Descanso", "RIR", "Tipo", "Video"
     ]
 
     def _reset_fila(key_seccion: str, fila_idx: int, seccion_actual: str, key_entrenamiento: str) -> None:
@@ -1350,6 +1361,7 @@ def crear_rutinas():
         fila_vacia["RepsMax"] = ""
         fila_vacia["RirMin"] = ""
         fila_vacia["RirMax"] = ""
+        fila_vacia["Porcentaje"] = ""
         fila_vacia["Video"] = ""
         fila_vacia["_exact_on_load"] = False
         fila_vacia.pop("TopSetData", None)
@@ -1357,7 +1369,7 @@ def crear_rutinas():
 
         prefixes = [
             "circ", "buscar", "select", "det", "ser", "rmin",
-            "rmax", "peso", "tiempo", "desc", "rirmin",
+            "rmax", "peso", "porc", "tiempo", "desc", "rirmin",
             "rirmax"
         ]
         for pref in prefixes:
@@ -1435,7 +1447,7 @@ def crear_rutinas():
             # --- Encabezado de sección con toggles ---
             st.markdown(SECTION_CONTAINER_HTML, unsafe_allow_html=True)
             # +1 columna a la derecha para el botón "Crear ejercicio"
-            head_cols = st.columns([6.0, 1.4, 1.4, 1.4, 1.4, 1.6], gap="small")
+            head_cols = st.columns([5.8, 1.2, 1.2, 1.2, 1.2, 1.2, 1.6], gap="small")
 
             with head_cols[0]:
                 st.markdown(f"<h4 class='h-accent' style='margin-top:2px'>{seccion}</h4>", unsafe_allow_html=True)
@@ -1446,18 +1458,25 @@ def crear_rutinas():
                     value=st.session_state.get(f"show_tiempo_{key_seccion}", False),
                 )
             with head_cols[2]:
+                show_porcentaje_sec = st.toggle(
+                    "Porcentaje",
+                    key=f"show_pct_{key_seccion}",
+                    value=st.session_state.get(f"show_pct_{key_seccion}", False),
+                    help="Agrega una columna para indicar el % del RM a usar en la sugerencia de peso.",
+                )
+            with head_cols[3]:
                 show_progresion_sec = st.toggle(
                     "Progresión",
                     key=f"show_prog_{key_seccion}",
                     value=st.session_state.get(f"show_prog_{key_seccion}", False),
                 )
-            with head_cols[3]:
+            with head_cols[4]:
                 show_top_set_sec = st.toggle(
                     "Set Mode",
                     key=f"show_topset_{key_seccion}",
                     value=st.session_state.get(f"show_topset_{key_seccion}", False),
                 )
-            with head_cols[4]:
+            with head_cols[5]:
                 show_descanso_sec = st.toggle(
                     "Descanso",
                     key=f"show_desc_{key_seccion}",
@@ -1466,7 +1485,7 @@ def crear_rutinas():
             
             # --- Botón/Popover: "＋" Crear ejercicio (encabezado de sección) con permisos ---
             if _tiene_permiso_agregar():
-                pop = head_cols[5].popover("＋", use_container_width=True)  # ← sin key (tu Streamlit no lo soporta)
+                pop = head_cols[6].popover("＋", use_container_width=True)  # ← sin key (tu Streamlit no lo soporta)
                 with pop:
                     st.markdown("**📌 Crear o Editar Ejercicio (rápido)**")
 
@@ -1658,10 +1677,15 @@ def crear_rutinas():
             headers = BASE_HEADERS.copy()
             sizes = BASE_SIZES.copy()
 
-            # antes
-            # rir_idx = headers.index("RIR")
+            if not show_porcentaje_sec:
+                try:
+                    pct_idx = headers.index("Porcentaje")
+                except ValueError:
+                    pct_idx = -1
+                if pct_idx >= 0:
+                    headers.pop(pct_idx)
+                    sizes.pop(pct_idx)
 
-            # después
             rir_idx = headers.index("RIR (Min/Max)")
 
             if show_tiempo_sec:
@@ -1708,7 +1732,12 @@ def crear_rutinas():
                 filas_marcadas_para_borrar: list[tuple[int, str]] = []
                 filas_para_copiar: list[tuple[int, dict]]
                 filas_para_copiar = []
+                pendientes_sugerencia: list[dict] = []
                 fuzzy_index = _get_fuzzy_index(ejercicios_dict)
+                pending_pesos = st.session_state.get("_pending_pesos", {})
+                popover_key = f"_popover_sugerencias_{key_seccion}"
+                applied_pesos: set[str] = set()
+
                 for idx, fila in enumerate(st.session_state[key_seccion]):
                     key_entrenamiento = f"{i}_{seccion.replace(' ','_')}_{idx}"
                     cols = st.columns(sizes)
@@ -1834,6 +1863,11 @@ def crear_rutinas():
                     )
 
                     peso_widget_key = f"peso_{key_entrenamiento}"
+                    if pending_pesos and peso_widget_key in pending_pesos:
+                        val = pending_pesos[peso_widget_key]
+                        fila["Peso"] = val
+                        st.session_state[peso_widget_key] = str(val)
+                        applied_pesos.add(peso_widget_key)
                     peso_value = fila.get("Peso","")
                     pesos_disponibles = []
                     usar_text_input = True
@@ -1864,6 +1898,27 @@ def crear_rutinas():
                             "", value=str(peso_value),
                             key=peso_widget_key, label_visibility="collapsed", placeholder="Kg"
                         )
+
+                    nombre_ej = (fila.get("Ejercicio","") or "").strip()
+                    if not str(fila.get("Peso","")).strip() and nombre_ej:
+                        pendientes_sugerencia.append({
+                            "nombre": nombre_ej,
+                            "porcentaje": fila.get("Porcentaje"),
+                            "peso_key": peso_widget_key,
+                            "fila_ref": fila,
+                        })
+
+                    if "Porcentaje" in pos:
+                        fila["Porcentaje"] = cols[pos["Porcentaje"]].text_input(
+                            "",
+                            value=str(fila.get("Porcentaje", "")),
+                            key=f"porc_{key_entrenamiento}",
+                            label_visibility="collapsed",
+                            placeholder="Ej. 80",
+                            help="Ingresa solo el número sin el símbolo %.",
+                        )
+                    else:
+                        fila.setdefault("Porcentaje", "")
 
                     if "Tiempo" in pos:
                         fila["Tiempo"] = cols[pos["Tiempo"]].text_input(
@@ -2070,6 +2125,73 @@ def crear_rutinas():
 
                     if mostrar_copia:
                         filas_para_copiar.append((idx, dict(fila)))
+
+                if pending_pesos and applied_pesos:
+                    restante = {k: v for k, v in pending_pesos.items() if k not in applied_pesos}
+                    if restante:
+                        st.session_state["_pending_pesos"] = restante
+                    else:
+                        st.session_state.pop("_pending_pesos", None)
+
+                if pendientes_sugerencia:
+                    st.markdown(SECTION_BREAK_HTML, unsafe_allow_html=True)
+                    st.markdown("**Sugerir pesos para campos vacíos**")
+                    # Mostrar popover con el último resultado si existe
+                    ultimo_popover = st.session_state.get(popover_key)
+                    if ultimo_popover:
+                        pop = st.popover("Ver últimos resultados", use_container_width=True)
+                        with pop:
+                            for item in ultimo_popover:
+                                st.markdown(
+                                    f"**{item.get('nombre','')}** — Peso: {item.get('peso','—')} | Reps: {item.get('reps','—')} | RIR: {item.get('rir','—')} | %: {item.get('porcentaje','—')}\n\n{item.get('comentario','')}"
+                                )
+                        st.session_state.pop(popover_key, None)
+                    if st.button("Sugerir todos los pesos vacíos", key=f"sugerir_todos_{key_seccion}", type="secondary"):
+                        correo_cli = (st.session_state.get("crear_correo_cliente") or correo or "").strip().lower()
+                        fecha_lunes = st.session_state.get("crear_fecha_inicio") or fecha_inicio
+                        fecha_str = fecha_lunes.strftime("%Y_%m_%d") if isinstance(fecha_lunes, (datetime, date)) else ""
+                        if not correo_cli or not fecha_str:
+                            st.warning("Completa correo del cliente y fecha de inicio para sugerir.")
+                        else:
+                            completados = 0
+                            with st.spinner("Consultando KEPE para pesos vacíos..."):
+                                pending_updates = dict(st.session_state.get("_pending_pesos", {}))
+                                resumen_pop = []
+                                for pend in pendientes_sugerencia:
+                                    pct_raw = pend.get("porcentaje")
+                                    try:
+                                        pct_val = float(str(pct_raw).replace(",", ".")) if pct_raw not in (None, "") else None
+                                    except Exception:
+                                        pct_val = None
+                                    try:
+                                        res = agente_sugerencia_rutina(
+                                            correo_cliente=correo_cli,
+                                            nombre_ejercicio=pend["nombre"],
+                                            fecha_semana_actual=fecha_str,
+                                            porcentaje_objetivo=pct_val,
+                                        )
+                                        peso_sug = res.get("peso_sugerido")
+                                        if peso_sug not in (None, ""):
+                                            pending_updates[pend["peso_key"]] = str(peso_sug)
+                                            completados += 1
+                                        resumen_pop.append({
+                                            "nombre": pend["nombre"],
+                                            "peso": res.get("peso_sugerido", "—"),
+                                            "reps": res.get("reps_sugeridas", "—"),
+                                            "rir": res.get("rir_sugerido", "—"),
+                                            "porcentaje": res.get("porcentaje_usado", "—"),
+                                            "comentario": res.get("comentario", ""),
+                                        })
+                                    except Exception as exc:
+                                        st.warning(f"No se pudo sugerir para {pend['nombre']}: {exc}")
+                            if completados:
+                                st.success(f"Pesos sugeridos para {completados} ejercicio(s).")
+                                st.session_state["_pending_pesos"] = pending_updates
+                                if resumen_pop:
+                                    st.session_state[popover_key] = resumen_pop
+                                rerun_fn = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+                                if rerun_fn:
+                                    rerun_fn()
 
                 total_dias = len(dias)
                 if filas_para_copiar:
