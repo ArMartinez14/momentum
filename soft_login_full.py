@@ -53,6 +53,7 @@ _COOKIE_WAIT_POLL_DELAY = 0.2
 _URL_TOKEN_CACHE_KEY = "_softlogin_url_token"
 _URL_TOKEN_TS_KEY = "_softlogin_url_token_ts"
 _URL_TOKEN_REFRESH_SECONDS = 45.0
+_URL_TOKEN_ENABLED = "SOFTLOGIN_URL_TOKEN_ENABLED"
 
 
 def _inject_login_styles():
@@ -373,8 +374,19 @@ def _restore_persisted_ui_state(role: str | None, state: object) -> bool:
 # =========================
 # Helpers de URL (respaldo móvil)
 # =========================
+def _url_token_enabled() -> bool:
+    """
+    Controla el respaldo de sesión en la URL (?mt=...).
+    Deshabilitado por defecto para evitar que al compartir un link se filtre la sesión.
+    Actívalo solo si necesitas compatibilidad extra en móviles:
+    SOFTLOGIN_URL_TOKEN_ENABLED=true en secrets.
+    """
+    return bool(st.secrets.get(_URL_TOKEN_ENABLED, False))
+
 def _set_url_token(token: str):
     """Guarda el token firmado en la URL (?mt=...) para rehidratar sesión en móviles si la cookie no vuelve."""
+    if not _url_token_enabled():
+        return
     try:
         qs = dict(st.query_params)
         current = qs.get("mt")
@@ -399,6 +411,8 @@ def _set_url_token(token: str):
         pass
 
 def _read_token_from_url() -> str | None:
+    if not _url_token_enabled():
+        return None
     try:
         return st.query_params.get("mt")
     except Exception:
@@ -592,12 +606,19 @@ def _read_token_from_component(cm):
         return None
 
 def _get_cookie(cm):
+    # Si deshabilitamos el respaldo en URL, limpiamos cualquier mt residual para no compartirlo.
+    if not _url_token_enabled():
+        _clear_url_token()
+
     # 1) componente (get_all -> get)
     token = _read_token_from_component(cm)
+    source = "cookie" if token else None
 
     # 2) respaldo: token en URL
     if not token:
         token = _read_token_from_url()
+        if token:
+            source = "url"
 
     # 3) fallback a cache en memoria
     if not token:
@@ -609,7 +630,16 @@ def _get_cookie(cm):
         raw = _signer().unsign(token, max_age=31 * 24 * 3600)  # tope 31 días
         if isinstance(raw, (bytes, bytearray)):
             raw = raw.decode()
-        return json.loads(raw)
+        data = json.loads(raw)
+
+        # Si ya tenemos cookie, limpiamos el token en la URL para evitar filtrarlo al compartir un link.
+        if source == "cookie":
+            _clear_url_token()
+        # Si vino desde la URL, también lo limpiamos tras hidratar.
+        if source == "url":
+            _clear_url_token()
+
+        return data
     except (BadSignature, SignatureExpired, Exception):
         return None
 

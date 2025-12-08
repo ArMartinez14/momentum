@@ -1364,7 +1364,12 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
 
     ejercicios_dict = EJERCICIOS
 
-    toggle_cols = st.columns([6.5, 1.1, 1.1, 1.1, 1.1, 1.7], gap="small")
+    # Mantén los toggles en una sola línea y evita cortes de texto
+    st.markdown(
+        "<style>div[data-testid='stToggle'] label { white-space: nowrap; }</style>",
+        unsafe_allow_html=True,
+    )
+    toggle_cols = st.columns([6.0, 1.4, 1.5, 1.5, 1.5, 1.8], gap="medium")
     toggle_cols[0].markdown(f"<h4 class='h-accent' style='margin-top:2px'>{seccion}</h4>", unsafe_allow_html=True)
 
     show_tiempo = toggle_cols[1].toggle("Tiempo", key=f"show_tiempo_{key_seccion}")
@@ -1793,62 +1798,64 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
             if mostrar_top_set:
                 st.markdown(SECTION_BREAK_HTML, unsafe_allow_html=True)
                 num_sets = _parse_series_count(fila.get("Series"))
+                datos_top = fila.get("TopSetData")
+                if not isinstance(datos_top, list):
+                    datos_top = []
+
                 if num_sets <= 0:
-                    st.info("Define un número de series para generar los Set Mode.")
-                    fila.pop("TopSetData", None)
-                else:
-                    datos_top = fila.get("TopSetData")
-                    if not isinstance(datos_top, list):
-                        datos_top = []
-                    datos_top = _ensure_topset_len(datos_top, num_sets)
-                    for set_idx in range(num_sets):
-                        set_key = f"topset_{key_entrenamiento}_{idx}_{set_idx}"
-                        fila_cols_top = st.columns(sizes)
-                        datos_top[set_idx]["Series"] = fila_cols_top[pos["Series"]].text_input(
-                            "",
-                            value=str(datos_top[set_idx].get("Series", "")),
-                            key=f"{set_key}_series",
-                            label_visibility="collapsed",
-                            placeholder=f"Serie {set_idx + 1}",
-                        )
-                        rep_cols_top = fila_cols_top[pos["Repeticiones"]].columns(2)
-                        datos_top[set_idx]["RepsMin"] = rep_cols_top[0].text_input(
-                            "",
-                            value=str(datos_top[set_idx].get("RepsMin", "")),
-                            key=f"{set_key}_rmin",
-                            label_visibility="collapsed",
-                            placeholder="Min",
-                        )
-                        datos_top[set_idx]["RepsMax"] = rep_cols_top[1].text_input(
-                            "",
-                            value=str(datos_top[set_idx].get("RepsMax", "")),
-                            key=f"{set_key}_rmax",
-                            label_visibility="collapsed",
-                            placeholder="Max",
-                        )
-                        datos_top[set_idx]["Peso"] = fila_cols_top[pos["Peso"]].text_input(
-                            "",
-                            value=str(datos_top[set_idx].get("Peso", "")),
-                            key=f"{set_key}_peso",
-                            label_visibility="collapsed",
-                            placeholder="Kg",
-                        )
-                        rir_cols_top = fila_cols_top[pos["RIR (Min/Max)"]].columns(2)
-                        datos_top[set_idx]["RirMin"] = rir_cols_top[0].text_input(
-                            "",
-                            value=str(datos_top[set_idx].get("RirMin", "")),
-                            key=f"{set_key}_rirmin",
-                            label_visibility="collapsed",
-                            placeholder="Min",
-                        )
-                        datos_top[set_idx]["RirMax"] = rir_cols_top[1].text_input(
-                            "",
-                            value=str(datos_top[set_idx].get("RirMax", "")),
-                            key=f"{set_key}_rirmax",
-                            label_visibility="collapsed",
-                            placeholder="Max",
-                        )
-                    fila["TopSetData"] = datos_top
+                    # Si no hay series definidas, mostramos al menos una fila para que el coach pueda completar.
+                    num_sets = max(len(datos_top), 1)
+                    st.info("Define un número de series para que los Set Mode coincidan. Se muestran filas temporales.")
+
+                datos_top = _ensure_topset_len(datos_top, num_sets)
+                for set_idx in range(num_sets):
+                    set_key = f"topset_{key_entrenamiento}_{idx}_{set_idx}"
+                    fila_cols_top = st.columns(sizes)
+                    datos_top[set_idx]["Series"] = fila_cols_top[pos["Series"]].text_input(
+                        "",
+                        value=str(datos_top[set_idx].get("Series", "")),
+                        key=f"{set_key}_series",
+                        label_visibility="collapsed",
+                        placeholder=f"Serie {set_idx + 1}",
+                    )
+                    rep_cols_top = fila_cols_top[pos["Repeticiones"]].columns(2)
+                    datos_top[set_idx]["RepsMin"] = rep_cols_top[0].text_input(
+                        "",
+                        value=str(datos_top[set_idx].get("RepsMin", "")),
+                        key=f"{set_key}_rmin",
+                        label_visibility="collapsed",
+                        placeholder="Min",
+                    )
+                    datos_top[set_idx]["RepsMax"] = rep_cols_top[1].text_input(
+                        "",
+                        value=str(datos_top[set_idx].get("RepsMax", "")),
+                        key=f"{set_key}_rmax",
+                        label_visibility="collapsed",
+                        placeholder="Max",
+                    )
+                    datos_top[set_idx]["Peso"] = fila_cols_top[pos["Peso"]].text_input(
+                        "",
+                        value=str(datos_top[set_idx].get("Peso", "")),
+                        key=f"{set_key}_peso",
+                        label_visibility="collapsed",
+                        placeholder="Kg",
+                    )
+                    rir_cols_top = fila_cols_top[pos["RIR (Min/Max)"]].columns(2)
+                    datos_top[set_idx]["RirMin"] = rir_cols_top[0].text_input(
+                        "",
+                        value=str(datos_top[set_idx].get("RirMin", "")),
+                        key=f"{set_key}_rirmin",
+                        label_visibility="collapsed",
+                        placeholder="Min",
+                    )
+                    datos_top[set_idx]["RirMax"] = rir_cols_top[1].text_input(
+                        "",
+                        value=str(datos_top[set_idx].get("RirMax", "")),
+                        key=f"{set_key}_rirmax",
+                        label_visibility="collapsed",
+                        placeholder="Max",
+                    )
+                fila["TopSetData"] = datos_top
             else:
                 if show_top_set_sec:
                     fila.pop("TopSetData", None)

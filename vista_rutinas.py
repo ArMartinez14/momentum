@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import streamlit as st
-from firebase_admin import firestore
+from firebase_admin import firestore, storage
 from datetime import datetime, timedelta, date
-import json, random, re, math, html
+import json, random, re, math, html, os
 from io import BytesIO
 import matplotlib.pyplot as plt
 import time
 from app_core.firebase_client import get_db
+from app_core.storage_client import upload_bytes_get_url
 from app_core.theme import inject_theme
 from app_core.users_service import get_users_map
 from app_core.utils import empresa_de_usuario, EMPRESA_MOTION, EMPRESA_ASESORIA, EMPRESA_DESCONOCIDA
@@ -244,6 +245,16 @@ st.markdown(
         align-items: center;
         justify-content: center;
         gap: 8px;
+    }
+    /* Evita cortes de texto en toggles y centra contenido */
+    div[data-testid="stToggle"] {
+        align-items: center;
+    }
+    div[data-testid="stToggle"] label {
+        white-space: nowrap;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
     }
     .routine-day {
         text-align: center;
@@ -580,12 +591,25 @@ def _format_minutos(v) -> str:
     n = int(round(f))
     return f"{n} Minuto" if n == 1 else f"{n} Minutos"
 
-def _peso_to_float(v):
+def _peso_to_float(v, unidad=None):
     try:
-        s = str(v or "").lower().replace("kg", "").replace(",", ".").strip()
+        raw = str(v or "")
+        unidad_norm = _normalizar_unidad_peso(unidad)
+        raw_low = raw.lower()
+        if unidad is None:
+            if "lb" in raw_low:
+                unidad_norm = "lb"
+            else:
+                unidad_norm = "kg"
+        s = raw_low.replace("kg", "").replace("lbs", "").replace("lb", "").replace(",", ".").strip()
         if s == "":
             return None
-        return float(s)
+        num = float(s)
+        if not math.isfinite(num):
+            return None
+        if unidad_norm == "lb":
+            num = num * 0.45359237
+        return num
     except Exception:
         return None
 
@@ -765,10 +789,12 @@ def _rango_a_texto(min_val, max_val) -> str:
     return ""
 
 
-def _render_top_sets_block(top_sets: list[dict]) -> str:
+def _render_top_sets_block(top_sets: list[dict], usar_libras: bool = False, mostrar_titulo: bool = True) -> str:
     if not top_sets:
         return ""
-    parts = ["<div class='topset-card'>", "<div class='topset-card__title'>Set Mode</div>"]
+    parts = ["<div class='topset-card'>"]
+    if mostrar_titulo:
+        parts.append("<div class='topset-card__title'>Set Mode</div>")
     for idx, item in enumerate(top_sets, 1):
         serie_label = item.get("Series") or f"Serie {idx}"
         reps_min, _ = _format_display_value(item.get("RepsMin"))
@@ -781,10 +807,17 @@ def _render_top_sets_block(top_sets: list[dict]) -> str:
             reps_txt = f"≤{reps_max}"
         else:
             reps_txt = "—"
-        peso_txt, peso_es_num = _format_display_value(item.get("Peso"))
-        if peso_txt and peso_es_num:
-            peso_txt = f"{peso_txt} kg"
-        elif not peso_txt:
+        peso_val, peso_es_num = _format_display_value(item.get("Peso"))
+        if usar_libras:
+            peso_num = _peso_to_float(item.get("Peso"))
+            if peso_num is not None:
+                peso_lb = peso_num * 2.20462
+                peso_val, peso_es_num = _format_display_value(peso_lb)
+        if peso_val and peso_es_num:
+            peso_txt = f"{peso_val} {'lb' if usar_libras else 'kg'}"
+        elif peso_val:
+            peso_txt = peso_val
+        else:
             peso_txt = "—"
         line = f"{serie_label} × {reps_txt} × {peso_txt}"
         rir_txt = _rango_a_texto(item.get("RirMin"), item.get("RirMax"))
@@ -940,13 +973,38 @@ def _match_mismo_ejercicio(a: dict, b: dict) -> bool:
         (a.get("bloque", a.get("seccion","")) == b.get("bloque", b.get("seccion","")))
     )
 
-def _parsear_series(series_data: list[dict]):
+def _normalizar_unidad_peso(valor) -> str:
+    v = str(valor or "").strip().lower()
+    if v in {"lb", "lbs", "libra", "libras"}:
+        return "lb"
+    return "kg"
+
+def _peso_a_kg(valor, unidad: str) -> float | None:
+    try:
+        txt = str(valor or "").replace(",", ".")
+        txt = re.sub(r"[^0-9\.-]", "", txt)
+        if txt.count(".") > 1:
+            head, *tail = txt.split(".")
+            txt = head + "." + "".join(tail)
+        if not txt.strip():
+            return None
+        num = float(txt)
+        if not math.isfinite(num):
+            return None
+        if _normalizar_unidad_peso(unidad) == "lb":
+            num = num * 0.45359237
+        return num
+    except Exception:
+        return None
+
+def _parsear_series(series_data: list[dict], unidad_default: str | None = "kg"):
+    unidad_base = _normalizar_unidad_peso(unidad_default)
     pesos, reps, rirs = [], [], []
     for s in (series_data or []):
-        try:
-            val = str(s.get("peso","")).replace(",","." ).replace("kg","").strip()
-            if val != "": pesos.append(float(val))
-        except: pass
+        unidad = _normalizar_unidad_peso(s.get("peso_unidad") or s.get("peso_unit") or unidad_base)
+        peso_float = _peso_a_kg(s.get("peso",""), unidad)
+        if peso_float is not None:
+            pesos.append(peso_float)
         try:
             reps_raw = str(s.get("reps","")).strip()
             if reps_raw.isdigit(): reps.append(int(reps_raw))
@@ -975,18 +1033,24 @@ def _tiene_reporte_guardado(ex_guardado: dict) -> bool:
     return False
 
 def _preparar_ejercicio_para_guardado(e: dict, correo_actor: str) -> dict:
+    unidad_peso = _normalizar_unidad_peso(e.get("peso_unidad") or e.get("peso_unit"))
+    e["peso_unidad"] = unidad_peso
     try: num_series = int(e.get("series",0))
     except: num_series = 0
     reps_def, peso_def, rir_def = defaults_de_ejercicio(e)
     if "series_data" not in e or not isinstance(e["series_data"], list) or len(e["series_data"]) != num_series:
-        e["series_data"] = [{"reps":reps_def, "peso":peso_def, "rir":rir_def} for _ in range(num_series)]
+        e["series_data"] = [{"reps":reps_def, "peso":peso_def, "rir":rir_def, "peso_unidad": unidad_peso} for _ in range(num_series)]
     else:
         for s in e["series_data"]:
             if not str(s.get("reps","")).strip(): s["reps"] = reps_def
             if not str(s.get("peso","")).strip(): s["peso"] = peso_def
             if not str(s.get("rir","")).strip():  s["rir"]  = rir_def
-    peso_alc, reps_alc, rir_alc = _parsear_series(e.get("series_data", []))
-    if peso_alc is not None: e["peso_alcanzado"] = peso_alc
+            if "peso_unidad" not in s or not s.get("peso_unidad"):
+                s["peso_unidad"] = unidad_peso
+    peso_alc, reps_alc, rir_alc = _parsear_series(e.get("series_data", []), unidad_peso)
+    if peso_alc is not None:
+        e["peso_alcanzado"] = peso_alc
+        e["peso_alcanzado_unidad"] = e.get("peso_unidad", "kg")
     if reps_alc is not None: e["reps_alcanzadas"] = reps_alc
     if rir_alc  is not None: e["rir_alcanzado"]  = rir_alc
     hay_input = any([(e.get("comentario","") or "").strip(), peso_alc is not None, reps_alc is not None, rir_alc is not None])
@@ -1002,7 +1066,7 @@ def _aplicar_delta_en_dia(dia_data, ejercicio_ref, delta, peso_base_ref):
             return False
         if not _match_mismo_ejercicio(ex, ejercicio_ref):
             return False
-        peso_actual = _peso_to_float(ex.get("peso"))
+        peso_actual = _peso_to_float(ex.get("peso"), ex.get("peso_unidad"))
         if peso_actual is None:
             return False
         if peso_base_ref is not None and abs(peso_actual - peso_base_ref) > 1e-4:
@@ -1152,6 +1216,7 @@ def _propagar_peso_a_futuras_semanas_sin_base(db, correo_original, bloque_rutina
                 continue
 
 def guardar_reporte_ejercicio(db, correo_cliente_norm, correo_original, semana_sel, dia_sel, ejercicio_editado, bloque_rutina=None):
+    ejercicio_editado["peso_unidad"] = _normalizar_unidad_peso(ejercicio_editado.get("peso_unidad") or ejercicio_editado.get("peso_unit"))
     fecha_norm = semana_sel.replace("-", "_")
     doc_id = f"{correo_cliente_norm}_{fecha_norm}"
     doc_ref = db.collection("rutinas_semanales").document(doc_id)
@@ -1166,18 +1231,22 @@ def guardar_reporte_ejercicio(db, correo_cliente_norm, correo_original, semana_s
         if _match_mismo_ejercicio(ex, ejercicio_editado):
             ejercicios_lista[i] = ejercicio_editado; changed = True; break
     if not changed: ejercicios_lista.append(ejercicio_editado)
-    peso_base_ref = _peso_to_float(ejercicio_editado.get("peso"))
+    peso_base_ref = _peso_to_float(ejercicio_editado.get("peso"), ejercicio_editado.get("peso_unidad"))
     if peso_base_ref is None:
-        peso_base_ref = _peso_to_float(ejercicio_editado.get("Peso"))
+        peso_base_ref = _peso_to_float(ejercicio_editado.get("Peso"), ejercicio_editado.get("peso_unidad"))
     peso_alcanzado_val = ejercicio_editado.get("peso_alcanzado")
     if peso_alcanzado_val is None:
-        peso_alcanzado_val, _, _ = _parsear_series(ejercicio_editado.get("series_data", []))
+        peso_alcanzado_val, _, _ = _parsear_series(
+            ejercicio_editado.get("series_data", []),
+            ejercicio_editado.get("peso_unidad"),
+        )
     peso_alcanzado_float = float(peso_alcanzado_val) if peso_alcanzado_val is not None else None
     if peso_base_ref is None and peso_alcanzado_float is not None:
         peso_formateado = _format_peso_value(peso_alcanzado_float)
         if peso_formateado:
             ejercicio_editado["peso"] = peso_formateado
             ejercicio_editado["Peso"] = peso_formateado
+            ejercicio_editado["peso_unidad"] = "kg"
 
     doc_ref.set({"rutina": {dia_sel: ejercicios_lista}}, merge=True)
 
@@ -1899,9 +1968,9 @@ def ver_rutinas():
 
         for idx, e in enumerate(lista):
             nombre = e.get("ejercicio", f"Ejercicio {idx+1}")
-            peso_valor, peso_es_num = _format_display_value(e.get("peso", ""))
-            tiempo_valor, tiempo_es_num = _format_display_value(e.get("tiempo", ""))
-            velocidad_valor, velocidad_es_num = _format_display_value(e.get("velocidad", ""))
+            unidad_origen = _normalizar_unidad_peso(e.get("peso_unidad") or e.get("peso_unit"))
+            usa_libras_default = (unidad_origen == "lb")
+            toggle_key = f"unidad_lb_vista_{cliente_sel}_{semana_sel}_{circuito}_{idx}"
 
             # 1) Video (puede venir en e['video'] o dentro de 'detalle' como link)
             video_url, detalle_visible = _video_y_detalle_desde_ejercicio(e)
@@ -1910,33 +1979,7 @@ def ver_rutinas():
             top_sets_data = _extraer_top_sets(e)
             tiene_top_sets = bool(top_sets_data)
 
-            partes = []
-            if not tiene_top_sets:
-                partes.append(f"{_repstr(e)}")
-                if peso_valor:
-                    partes.append(f"{peso_valor} kg" if peso_es_num else peso_valor)
-                if tiempo_valor:
-                    partes.append(f"{tiempo_valor} seg" if tiempo_es_num else tiempo_valor)
-                if velocidad_valor:
-                    partes.append(f"{velocidad_valor} m/s" if velocidad_es_num else velocidad_valor)
-                dsc = _descanso_texto(e)
-                if dsc:       partes.append(f"{dsc}")
-                rir_text = _rirstr(e)
-                if rir_text:  partes.append(f"RIR {rir_text}")
-
-            # 3) Texto de detalle (centrado)
-            info_str = f"""
-            <p style='text-align:center;
-                    color:var(--text-secondary-main);
-                    font-size:0.95rem;
-                    margin-top:6px;
-                    margin-bottom:0;
-                    letter-spacing:0.5px;'>
-                {' · '.join(partes)}
-            </p>
-            """
-
-            # 4) Contenedor del ejercicio (centrado)
+            # 3) Contenedor del ejercicio (centrado)
             st.markdown("<div class='exercise-block' style='margin:12px 0; text-align:center;'>", unsafe_allow_html=True)
 
             # 🔹 Nombre del ejercicio (botón centrado si hay video; texto si no)
@@ -1964,17 +2007,116 @@ def ver_rutinas():
                     unsafe_allow_html=True
                 )
 
-            # 🔹 Línea de detalles centrada
-            if partes:
-                st.markdown(info_str, unsafe_allow_html=True)
-            else:
-                st.markdown("<p style='margin:6px 0;'>&nbsp;</p>", unsafe_allow_html=True)
+            if tiene_top_sets:
+                # Columna central para el título
+                cols_title = st.columns([1, 1.6, 1])
+                with cols_title[1]:
 
-            if top_sets_data:
-                st.markdown(_render_top_sets_block(top_sets_data), unsafe_allow_html=True)
+                    # Fila: "Set Mode" | checkbox "lb"
+                    col_label, col_check = st.columns([0.55, 0.45])
+
+                    with col_label:
+                        st.markdown(
+                            "<div class='topset-card__title' "
+                            "style='margin-bottom:0; text-align:right;'>"
+                            "Set Mode"
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    with col_check:
+                        # ÚNICO checkbox (el que realmente usas en el código)
+                        usa_libras = st.checkbox(
+                            "lb",
+                            value=usa_libras_default,
+                            key=toggle_key,
+                            help="Ver peso en libras para este ejercicio",
+                            label_visibility="visible",
+                        )
+
+                    # Ajuste de margen para que no baje el checkbox
+                    st.markdown(
+                        """
+                        <style>
+                        /* Quitar espacio extra arriba del checkbox dentro de esta zona */
+                        div[data-testid="stCheckbox"] {
+                            margin-top: 0px;
+                        }
+                        </style>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                cols_set = st.columns([1, 2, 1])
+                with cols_set[1]:
+                    st.markdown(
+                        _render_top_sets_block(top_sets_data, usa_libras, mostrar_titulo=False),
+                        unsafe_allow_html=True,
+                    )
                 e["_top_sets_cached"] = top_sets_data
             else:
+                # Selector + resumen (misma zona, centrados)
+                cols_info = st.columns([1, 2, 1])
+
+                with cols_info[1]:
+                    # Texto arriba, checkbox centrado debajo
+                    info_placeholder = st.empty()
+                    # Ligeramente desplazado a la derecha para no quedar alineado con el texto
+                    cb_cols = st.columns([1.3, 1, 0.7])
+                    with cb_cols[1]:
+                        usa_libras = st.checkbox(
+                            "lb",
+                            value=usa_libras_default,
+                            key=toggle_key,
+                            help="Ver peso en libras para este ejercicio",
+                            label_visibility="visible",
+                        )
+
+                    # 2) Cálculo de partes usando usa_libras
+                    peso_base_kg = _peso_to_float(e.get("peso"), unidad_origen)
+                    if peso_base_kg is not None and usa_libras:
+                        peso_valor, peso_es_num = _format_display_value(peso_base_kg * 2.20462)
+                    elif peso_base_kg is not None:
+                        peso_valor, peso_es_num = _format_display_value(peso_base_kg)
+                    else:
+                        peso_valor, peso_es_num = _format_display_value(e.get("peso", ""))
+
+                    tiempo_valor, tiempo_es_num = _format_display_value(e.get("tiempo", ""))
+                    velocidad_valor, velocidad_es_num = _format_display_value(e.get("velocidad", ""))
+
+                    partes = [f"{_repstr(e)}"]
+                    if peso_valor:
+                        unidad_txt = "lb" if usa_libras else "kg"
+                        partes.append(f"{peso_valor} {unidad_txt}" if peso_es_num else peso_valor)
+                    if tiempo_valor:
+                        partes.append(f"{tiempo_valor} seg" if tiempo_es_num else tiempo_valor)
+                    if velocidad_valor:
+                        partes.append(f"{velocidad_valor} m/s" if velocidad_es_num else velocidad_valor)
+                    dsc = _descanso_texto(e)
+                    if dsc:
+                        partes.append(f"{dsc}")
+                    rir_text = _rirstr(e)
+                    if rir_text:
+                        partes.append(f"RIR {rir_text}")
+
+                    # 3) Texto de partes centrado bajo el header
+                    info_str = f"""
+                    <p style='text-align:center;
+                            color:var(--text-secondary-main);
+                            font-size:0.95rem;
+                            margin-top:0;
+                            margin-bottom:0;
+                            letter-spacing:0.5px;'>
+                        {' · '.join(partes)}
+                    </p>
+                    """
+                    info_placeholder.markdown(info_str, unsafe_allow_html=True)
+
                 e.pop("_top_sets_cached", None)
+
+
+
+
 
             # 🔹 Comentario centrado
             comentario_cliente = (e.get("comentario", "") or "").strip()
@@ -2006,7 +2148,10 @@ def ver_rutinas():
                             (e.get("ejercicio") or "").strip().lower())
                 ex_prev = ejercicios_prev_map.get(key_prev)
                 if ex_prev:
-                    peso_alc, reps_alc, rir_alc = _parsear_series(ex_prev.get("series_data", []))
+                    peso_alc, reps_alc, rir_alc = _parsear_series(
+                        ex_prev.get("series_data", []),
+                        ex_prev.get("peso_unidad"),
+                    )
                     peso_prev = peso_alc if peso_alc is not None else ex_prev.get("peso_alcanzado","")
                     reps_prev = reps_alc if reps_alc is not None else ex_prev.get("reps_alcanzadas","")
                     rir_prev  = rir_alc  if rir_alc  is not None else ex_prev.get("rir_alcanzado","")
@@ -2067,6 +2212,15 @@ def ver_rutinas():
 
                 reps_def_global, peso_def_global, rir_def_global = defaults_de_ejercicio(e)
 
+                unidad_inicial = _normalizar_unidad_peso(
+                    e.get("peso_unidad")
+                    or (e.get("series_data", [{}])[0].get("peso_unidad") if e.get("series_data") else None)
+                    or (e.get("peso_unit") or None)
+                )
+                usa_libras = (unidad_inicial == "lb")
+                unidad_sel = "lb" if usa_libras else "kg"
+                e["peso_unidad"] = unidad_sel
+
                 def _defaults_por_idx(idx: int):
                     reps_def = reps_def_global
                     peso_def = peso_def_global
@@ -2082,7 +2236,7 @@ def ver_rutinas():
                     e["series_data"] = []
                     for s_idx in range(num_series):
                         reps_def, peso_def, rir_def = _defaults_por_idx(s_idx)
-                        e["series_data"].append({"reps": reps_def, "peso": peso_def, "rir": rir_def})
+                        e["series_data"].append({"reps": reps_def, "peso": peso_def, "rir": rir_def, "peso_unidad": unidad_sel})
                 else:
                     for s_idx in range(num_series):
                         reps_def, peso_def, rir_def = _defaults_por_idx(s_idx)
@@ -2093,13 +2247,26 @@ def ver_rutinas():
                             s["peso"] = peso_def
                         if not str(s.get("rir", "")).strip():
                             s["rir"] = rir_def
+                        s["peso_unidad"] = unidad_sel
 
                 # Inputs por serie
                 grid_template = [0.3, 0.5, 0.5, 0.5]
                 header_cols = st.columns(grid_template)
                 header_cols[0].markdown("<div class='routine-report-grid__title'>Series</div>", unsafe_allow_html=True)
                 header_cols[1].markdown("<div class='routine-report-grid__title'>Repeticiones</div>", unsafe_allow_html=True)
-                header_cols[2].markdown("<div class='routine-report-grid__title'>Peso</div>", unsafe_allow_html=True)
+                with header_cols[2]:
+                    st.markdown(
+                        f"<div class='routine-report-grid__title'>Peso ({'kg' if unidad_sel=='kg' else 'lb'})</div>",
+                        unsafe_allow_html=True,
+                    )
+                    usa_libras = st.checkbox(
+                        "Libras",
+                        value=(unidad_sel == "lb"),
+                        key=f"unidad_lb_{ejercicio_id}",
+                        help="Marca si reportas el peso en libras.",
+                    )
+                    unidad_sel = "lb" if usa_libras else "kg"
+                    e["peso_unidad"] = unidad_sel
                 header_cols[3].markdown("<div class='routine-report-grid__title'>RIR</div>", unsafe_allow_html=True)
 
                 for s_idx in range(num_series):
@@ -2115,14 +2282,54 @@ def ver_rutinas():
                     e["series_data"][s_idx]["reps"] = _sanitizar_valor_reporte(reps_val, "reps")
                     peso_val = row_cols[2].text_input(
                         "Peso", value=e["series_data"][s_idx].get("peso", ""),
-                        placeholder="Kg", key=f"peso_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
+                        placeholder="Peso (kg)" if unidad_sel == "kg" else "Peso (lb)",
+                        key=f"peso_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
                     )
                     e["series_data"][s_idx]["peso"] = _sanitizar_valor_reporte(peso_val, "peso")
+                    e["series_data"][s_idx]["peso_unidad"] = unidad_sel
                     rir_val = row_cols[3].text_input(
                         "RIR", value=e["series_data"][s_idx].get("rir", ""),
                         placeholder="RIR", key=f"rir_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
                     )
                     e["series_data"][s_idx]["rir"] = _sanitizar_valor_reporte(rir_val, "rir")
+
+                # Video de reporte (subida y vista previa)
+                st.markdown("<div class='routine-caption'>Video de la serie (opcional)</div>", unsafe_allow_html=True)
+                if e.get("reporte_video_url"):
+                    st.video(e["reporte_video_url"])
+                video_uploader = st.file_uploader(
+                    "Subir video (mp4/mov)",
+                    type=["mp4", "mov", "m4v"],
+                    key=f"video_{ejercicio_id}",
+                    accept_multiple_files=False,
+                    label_visibility="collapsed",
+                    help="Se genera un link para el coach; límite sugerido 80 MB.",
+                )
+                if video_uploader:
+                    size_bytes = getattr(video_uploader, "size", 0) or 0
+                    size_mb = size_bytes / (1024 * 1024)
+                    if size_mb > 80:
+                        st.error("El video supera los 80 MB. Súbelo más liviano.")
+                    else:
+                        try:
+                            data = video_uploader.read()
+                            ext = (video_uploader.name or "video.mp4").split(".")[-1].lower()
+                            if ext not in {"mp4", "mov", "m4v"}:
+                                ext = "mp4"
+                            path = f"reportes_videos/{normalizar_correo(rutina_doc.get('correo',''))}/{semana_sel}/{dia_sel}/{ejercicio_id}.{ext}"
+                            url = upload_bytes_get_url(
+                                data,
+                                path,
+                                content_type=video_uploader.type or "video/mp4",
+                                signed_ttl_days=30,
+                            )
+                            e["reporte_video_url"] = url
+                            e["reporte_video_path"] = path
+                            e["reporte_video_subido_en"] = datetime.utcnow().isoformat()
+                            st.success("Video subido y asociado al ejercicio.")
+                        except Exception as ex:
+                            st.error("No se pudo subir el video. Intenta nuevamente.")
+                            st.exception(ex)
 
                 # Comentario general
                 st.markdown("<div class='routine-caption'>Comentario general</div>", unsafe_allow_html=True)
@@ -2135,7 +2342,10 @@ def ver_rutinas():
                 btn_guardar_key = f"guardar_reporte_{ejercicio_id}"
                 if st.button("💾 Guardar este reporte", key=btn_guardar_key):
                     with st.spinner("Guardando reporte del ejercicio..."):
-                        peso_alc, reps_alc, rir_alc = _parsear_series(e.get("series_data", []))
+                        peso_alc, reps_alc, rir_alc = _parsear_series(
+                            e.get("series_data", []),
+                            e.get("peso_unidad"),
+                        )
                         if peso_alc is not None: e["peso_alcanzado"] = peso_alc
                         if reps_alc is not None: e["reps_alcanzadas"] = reps_alc
                         if rir_alc  is not None: e["rir_alcanzado"]  = rir_alc

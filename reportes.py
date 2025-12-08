@@ -39,6 +39,35 @@ def es_no_vacio(v):
     if isinstance(v, str): return v.strip() != ""
     return True
 
+def _orden_circuito_val(circuito: str | None) -> int:
+    """
+    Ordena circuitos de forma consistente:
+      - Warm Up primero
+      - Luego letras A, B, C...
+      - Valores desconocidos al final
+    """
+    if circuito is None:
+        return 99
+    c_str = str(circuito).strip()
+    if not c_str:
+        return 99
+    c_upper = c_str.upper()
+    if c_upper in {"WARM UP", "WARM-UP", "WARMUP"}:
+        return 0
+    if len(c_upper) == 1 and c_upper.isalpha():
+        return 1 + (ord(c_upper) - ord("A"))
+    return 98
+
+def _circuito_de_ejercicio(ej: dict) -> str:
+    circ = (ej.get("circuito") or ej.get("Circuito") or "").strip()
+    if circ:
+        return circ
+    bloque = (ej.get("bloque") or ej.get("seccion") or "").strip()
+    bloque_norm = bloque.lower().replace("-", " ").replace("_", " ")
+    if bloque_norm == "warm up":
+        return "Warm Up"
+    return ""
+
 def parse_fecha_de_id(doc_id: str) -> str | None:
     m = re.search(r"_(\d{4})_(\d{2})_(\d{2})$", doc_id)
     if not m: return None
@@ -48,14 +77,16 @@ def parse_fecha_de_id(doc_id: str) -> str | None:
     except Exception:
         return None
 
-def filas_series_data(cliente, dia_label, ejercicio_nombre, series_data, comentario=""):
+def filas_series_data(cliente, dia_label, ejercicio_nombre, series_data, comentario="", circuito=""):
     filas = []
+    circuito = (circuito or "").strip()
     comentario = (comentario or "").strip()
     tiene_series = False
     if not isinstance(series_data, list): return filas
     for idx, s in enumerate(series_data):
         if isinstance(s, dict) and any(es_no_vacio(v) for v in s.values()):
             fila = {"cliente": cliente, "día": dia_label, "ejercicio": ejercicio_nombre, "serie": idx + 1}
+            fila["circuito"] = circuito
             for k, v in s.items():
                 fila[str(k)] = v
             if comentario:
@@ -68,6 +99,7 @@ def filas_series_data(cliente, dia_label, ejercicio_nombre, series_data, comenta
             "día": dia_label,
             "ejercicio": ejercicio_nombre,
             "serie": "-",
+            "circuito": circuito,
             "comentario": comentario,
         })
     return filas
@@ -216,6 +248,7 @@ def ver_reportes():
                         if not isinstance(ej, dict): 
                             continue
                         nombre_ej = ej.get("ejercicio") or ej.get("nombre") or ej.get("id_ejercicio") or "(sin nombre)"
+                        circuito_ej = _circuito_de_ejercicio(ej)
                         if filtro_ejercicio and filtro_ejercicio.lower() not in str(nombre_ej).lower():
                             continue
                         series_data = ej.get("series_data", [])
@@ -228,7 +261,16 @@ def ver_reportes():
                             tiene_datos = any(isinstance(s, dict) and any(es_no_vacio(v) for v in s.values()) for s in series_data)
                             if not tiene_datos and not comentario:
                                 continue
-                        filas_series.extend(filas_series_data(cliente, dia_label, nombre_ej, series_data, comentario=comentario))
+                        filas_series.extend(
+                            filas_series_data(
+                                cliente,
+                                dia_label,
+                                nombre_ej,
+                                series_data,
+                                comentario=comentario,
+                                circuito=circuito_ej,
+                            )
+                        )
 
             # B) día = lista de ejercicios
             elif isinstance(dia_node, list):
@@ -242,6 +284,7 @@ def ver_reportes():
                     if not isinstance(ej, dict): 
                         continue
                     nombre_ej = ej.get("ejercicio") or ej.get("nombre") or ej.get("id_ejercicio") or "(sin nombre)"
+                    circuito_ej = _circuito_de_ejercicio(ej)
                     if filtro_ejercicio and filtro_ejercicio.lower() not in str(nombre_ej).lower():
                         continue
                     series_data = ej.get("series_data", [])
@@ -254,7 +297,16 @@ def ver_reportes():
                         tiene_datos = any(isinstance(s, dict) and any(es_no_vacio(v) for v in s.values()) for s in series_data)
                         if not tiene_datos and not comentario:
                             continue
-                    filas_series.extend(filas_series_data(cliente, dia_label, nombre_ej, series_data, comentario=comentario))
+                    filas_series.extend(
+                        filas_series_data(
+                            cliente,
+                            dia_label,
+                            nombre_ej,
+                            series_data,
+                            comentario=comentario,
+                            circuito=circuito_ej,
+                        )
+                    )
 
     if comentarios_vistos:
         try:
@@ -283,11 +335,14 @@ def ver_reportes():
         cliente = row["cliente"]; dia = row["día"]
         grupos[cliente][dia].append(row)
         for k in row.keys():
-            if k not in {"cliente","día","ejercicio","serie"}:
+            if k in {"cliente","día","ejercicio","serie","circuito","peso_unidad"}:
+                continue
+            # peso_unidad se fusiona en la columna de peso, no se muestra aparte
+            if k not in {"cliente","día","ejercicio","serie","circuito"}:
                 all_cols_dyn.add(k)
 
     clientes_orden = sorted(grupos.keys())
-    base_cols = ["ejercicio","serie"] + sorted(all_cols_dyn)
+    base_cols = ["circuito","ejercicio","serie"] + sorted(all_cols_dyn)
 
     for cliente in clientes_orden:
         st.markdown(f"### 👤 {cliente}")
@@ -296,9 +351,23 @@ def ver_reportes():
             st.markdown(f"**{dia}**")
             rows = grupos[cliente][dia]
             df = pd.DataFrame(rows)
+            if "peso" in df.columns and "peso_unidad" in df.columns:
+                df["peso"] = df.apply(
+                    lambda r: f"{r['peso']} {r['peso_unidad']}".strip() if pd.notna(r["peso"]) else r["peso"],
+                    axis=1,
+                )
+                df = df.drop(columns=["peso_unidad"])
+            if "circuito" not in df.columns:
+                df["circuito"] = ""
+            df["circuito"] = df["circuito"].fillna("").astype(str)
+            df["__ord_circ"] = df["circuito"].apply(_orden_circuito_val)
             cols_presentes = [c for c in base_cols if c in df.columns]
-            df_show = df[["ejercicio","serie"] + [c for c in cols_presentes if c not in {"ejercicio","serie"}]]
-            df_show = df_show.sort_values(["ejercicio","serie"], kind="stable")
+            df_show = df[
+                ["circuito","ejercicio","serie"]
+                + [c for c in cols_presentes if c not in {"circuito","ejercicio","serie"}]
+            ].copy()
+            df_show["__ord_circ"] = df["__ord_circ"].values
+            df_show = df_show.sort_values(["__ord_circ","ejercicio","serie"], kind="stable").drop(columns=["__ord_circ"])
             st.dataframe(df_show, use_container_width=True)
 
             rpe_val = rpe_map.get((cliente, dia))
