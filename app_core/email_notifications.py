@@ -23,6 +23,7 @@ from app_core.utils import (
     EMPRESA_DESCONOCIDA,
     EMPRESA_MOTION,
     correo_a_doc_id,
+    empresa_de_usuario,
     normalizar_correo,
 )
 from app_core.email_templates import (
@@ -406,6 +407,16 @@ def _nombre_empresa(empresa: str | None) -> str:
     return "nuestro programa"
 
 
+def _empresa_destino(empresa: Optional[str], correo: str) -> str:
+    empresa_norm = (empresa or "").strip().lower()
+    if empresa_norm:
+        return empresa_norm
+    try:
+        return empresa_de_usuario(correo)
+    except Exception:
+        return ""
+
+
 def _buscar_nombre_usuario(correo: str) -> Optional[str]:
     correo_norm = normalizar_correo(correo)
     if not correo_norm:
@@ -437,13 +448,19 @@ def enviar_correo_bienvenida(
     if not nombre:
         nombre = _buscar_nombre_usuario(correo_norm) or ""
 
-    portal_url = _resolve_portal_url(empresa)
-    anamnesis_url = _resolve_anamnesis_url(empresa)
-
-    empresa_txt = _nombre_empresa(empresa)
+    empresa_norm = _empresa_destino(empresa, correo_norm)
 
     rol_norm = (rol or "").strip().lower()
     es_coach = rol_norm in {"entrenador", "coach", "admin", "administrador"}
+
+    if empresa_norm == EMPRESA_MOTION and not es_coach:
+        _emit_info("Correo de bienvenida omitido para cliente Motion.")
+        return False
+
+    portal_url = _resolve_portal_url(empresa_norm)
+    anamnesis_url = _resolve_anamnesis_url(empresa_norm)
+
+    empresa_txt = _nombre_empresa(empresa_norm)
 
     contenido: EmailContent = build_bienvenida_email(
         nombre=nombre or "",
@@ -724,7 +741,13 @@ def enviar_correo_rutina_disponible(
     if not nombre:
         nombre = _buscar_nombre_usuario(correo_norm) or ""
 
-    portal_url = _resolve_portal_url(empresa)
+    empresa_norm = _empresa_destino(empresa, correo_norm)
+
+    if empresa_norm == EMPRESA_MOTION:
+        _emit_info("Correo de rutina omitido para cliente Motion.")
+        return False
+
+    portal_url = _resolve_portal_url(empresa_norm)
 
     coach_label = None
     if coach:
