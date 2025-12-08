@@ -29,8 +29,6 @@ def _normalize_bucket_name(name: str | None) -> str | None:
         if len(parts) == 2:
             cleaned = parts[1]
     cleaned = cleaned.split("/", 1)[0]
-    if cleaned.endswith(".firebasestorage.app"):
-        cleaned = cleaned[: -len(".firebasestorage.app")] + ".appspot.com"
     cleaned = cleaned.strip()
     return cleaned or None
 
