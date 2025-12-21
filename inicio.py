@@ -3,6 +3,7 @@
 from __future__ import annotations
 import sys
 from pathlib import Path
+import html
 import streamlit as st
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -61,6 +62,48 @@ st.markdown(
     div[data-testid="stButton"][data-key^="accion_"] button:hover {
         transform: translateY(-1px);
         box-shadow: 0 14px 30px rgba(226, 94, 80, 0.28);
+    }
+    div[data-testid="stButton"][data-key^="ver_comentarios_btn_"] button {
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid rgba(226, 94, 80, 0.35);
+        background: rgba(226, 94, 80, 0.08);
+        color: var(--text-secondary-main);
+        font-weight: 600;
+    }
+    .comment-table__wrapper {
+        margin-top: 10px;
+        border: 1px solid rgba(226, 94, 80, 0.2);
+        border-radius: 12px;
+        padding: 8px;
+        background: rgba(15, 23, 42, 0.35);
+    }
+    .comment-table__wrapper h5 {
+        margin-top: 0;
+        margin-bottom: 6px;
+        font-size: 0.95rem;
+        color: var(--text-secondary-main);
+    }
+    .comment-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+    }
+    .comment-table th,
+    .comment-table td {
+        border: 1px solid rgba(226, 94, 80, 0.25);
+        padding: 6px 8px;
+        text-align: left;
+    }
+    .comment-table th {
+        background: rgba(226, 94, 80, 0.18);
+        color: #FFEDEA;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .comment-table tbody tr:nth-child(even) {
+        background: rgba(255, 255, 255, 0.02);
     }
     </style>
     """,
@@ -175,7 +218,8 @@ def _doc_id_from_mail(mail: str) -> str:
 def _iter_ejercicios_en_doc(doc: dict):
     rutina = doc.get("rutina") or {}
     for dia_key, data_dia in rutina.items():
-        if not str(dia_key).isdigit():
+        dia_str = str(dia_key)
+        if not dia_str.isdigit():
             continue
         items = []
         if isinstance(data_dia, list):
@@ -186,34 +230,95 @@ def _iter_ejercicios_en_doc(doc: dict):
             else:
                 items = [e for e in data_dia.values() if isinstance(e, dict)]
         for item in items:
-            yield item
+            yield dia_str, item
+
+
+def _extraer_comentarios_doc(doc: dict) -> list[dict[str, str]]:
+    detalles: list[dict[str, str]] = []
+    for dia_str, ejercicio in _iter_ejercicios_en_doc(doc):
+        comentario = (ejercicio.get("comentario") or "").strip()
+        if not comentario:
+            continue
+        nombre_ejercicio = (
+            ejercicio.get("ejercicio")
+            or ejercicio.get("Ejercicio")
+            or ejercicio.get("nombre")
+            or ejercicio.get("id_ejercicio")
+            or "Ejercicio sin nombre"
+        )
+        detalles.append(
+            {
+                "dia": dia_str,
+                "ejercicio": str(nombre_ejercicio),
+                "comentario": comentario,
+            }
+        )
+    return detalles
+
+
+def _comentarios_table_html(registros: list[dict[str, str]]) -> str:
+    if not registros:
+        return ""
+    rows = [
+        "<div class='comment-table__wrapper'>",
+        "<h5>Comentarios recientes</h5>",
+        "<table class='comment-table'>",
+        "<thead><tr><th>Día</th><th>Ejercicio</th><th>Comentario</th></tr></thead>",
+        "<tbody>",
+    ]
+    for registro in registros:
+        dia_raw = str(registro.get("dia") or "").strip()
+        dia_label = f"Día {dia_raw}" if dia_raw else "Día —"
+        ejercicio_txt = html.escape(str(registro.get("ejercicio") or "Sin nombre"))
+        comentario_txt = html.escape(str(registro.get("comentario") or ""))
+        rows.append(
+            f"<tr><td>{html.escape(dia_label)}</td><td>{ejercicio_txt}</td><td>{comentario_txt}</td></tr>"
+        )
+    rows.extend(["</tbody>", "</table>", "</div>"])
+    return "".join(rows)
 
 def _comentarios_recientes_por_cliente(rutinas: list[dict], ack_map: dict[str, str] | None = None) -> dict[str, dict]:
-    """Devuelve mapping correo_cliente -> {'cliente': str, 'fecha': str, 'comentarios': [str]} considerando la semana más reciente con comentarios no vistos."""
+    """Comentarios de la semana actual o anterior; sólo se muestran si no han sido vistos."""
     ack_map = ack_map or {}
     resultado: dict[str, dict] = {}
+
+    semana_actual_str = _fecha_lunes_hoy()
+    try:
+        semana_actual_dt = datetime.strptime(semana_actual_str, "%Y-%m-%d").date()
+    except Exception:
+        semana_actual_dt = datetime.now().date()
+    semana_anterior_dt = semana_actual_dt - timedelta(days=7)
+
+    def _parse_fecha(fecha_str: str):
+        try:
+            return datetime.strptime(fecha_str, "%Y-%m-%d").date()
+        except Exception:
+            return None
+
     for doc in rutinas:
         cliente = (doc.get("cliente") or "").strip()
         fecha = doc.get("fecha_lunes") or ""
         correo_cliente = (doc.get("correo") or "").strip().lower()
         if not cliente or not fecha:
             continue
-        comentarios = []
-        for ejercicio in _iter_ejercicios_en_doc(doc):
-            comentario = (ejercicio.get("comentario") or "").strip()
-            if comentario:
-                comentarios.append(comentario)
+        fecha_dt = _parse_fecha(fecha)
+        if fecha_dt is None:
+            continue
+        if fecha_dt not in {semana_actual_dt, semana_anterior_dt}:
+            continue
+        comentarios = _extraer_comentarios_doc(doc)
         if not comentarios:
             continue
         ack_fecha = ack_map.get(correo_cliente)
         if ack_fecha and ack_fecha >= fecha:
             continue
         stored = resultado.get(correo_cliente)
-        if stored is None or fecha > stored.get("fecha", ""):
+        if stored is None or fecha >= stored.get("fecha", ""):
             resultado[correo_cliente] = {
                 "cliente": cliente,
                 "fecha": fecha,
                 "comentarios": comentarios,
+                "tiene_nuevos": True,
             }
     return resultado
 
@@ -446,10 +551,11 @@ def inicio_deportista():
         else:
             ack_map = _comentarios_ack_map(db, correo_raw)
             comentarios_recientes = _comentarios_recientes_por_cliente(asignadas, ack_map)
-            if comentarios_recientes:
+            nuevos = [p for p in comentarios_recientes.values() if p.get("tiene_nuevos")]
+            if nuevos:
                 avisos = []
-                for correo_cli, payload in comentarios_recientes.items():
-                    cliente_nombre = payload.get("cliente") or correo_cli
+                for payload in nuevos:
+                    cliente_nombre = payload.get("cliente") or "Cliente"
                     total = len(payload.get("comentarios", []))
                     texto = "un comentario" if total == 1 else f"{total} comentarios"
                     avisos.append(f"{cliente_nombre} dejó {texto}")
@@ -514,13 +620,16 @@ def inicio_deportista():
                     info_comentario = comentarios_recientes.get(correo_cli)
                     if info_comentario:
                         total_c = len(info_comentario.get("comentarios", []))
+                        hay_nuevos = info_comentario.get("tiene_nuevos")
+                        estado_badge = "Nuevo" if hay_nuevos else "Leído"
                         badge_html = (
                             "<div style='margin-top:10px;'>"
                             "<span style='display:inline-flex;align-items:center;padding:4px 12px;border-radius:14px;gap:6px;"
                             "background:linear-gradient(135deg, rgba(226,94,80,0.22), rgba(148,34,28,0.28));"
                             "color:#FFE4DE;font-weight:600;font-size:0.82rem;'>"
-                            "💬 Comentarios recientes"
+                            "💬 Comentarios"
                             f"<span style='background:rgba(226,94,80,0.32); color:#FFD4CB; border-radius:999px; padding:2px 8px; font-size:0.72rem;'>{total_c}</span>"
+                            f"<span style='background:{'rgba(203,80,71,0.55)' if hay_nuevos else 'rgba(148,163,184,0.35)'}; color:#FFEDEA; border-radius:999px; padding:2px 10px; font-size:0.68rem;'>{estado_badge}</span>"
                             "</span></div>"
                         )
                     fecha_badge = (
@@ -534,18 +643,32 @@ def inicio_deportista():
                     dias_label = "—/—"
                     if dias_total:
                         dias_label = f"{dias_comp}/{dias_total}"
-                    st.markdown(
-                        f"""
-                        <div class="card">
-                          <div class="card__title" style="font-size:1.05rem;">{nombre_cli}</div>
-                          <div class='muted' style='margin-top:6px;'>Bloque: Semana {sem_idx or '—'} de {sem_total or '—'}</div>
-                          <div class='muted' style='margin-top:2px;'>Días completados: {dias_label}</div>
-                          <div style='margin-top:8px;'>{fecha_badge}</div>
-                          {badge_html}
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
+                    card_box = st.container()
+                    with card_box:
+                        st.markdown(
+                            f"""
+                            <div class=\"card\">
+                              <div class=\"card__title\" style=\"font-size:1.05rem;\">{nombre_cli}</div>
+                              <div class='muted' style='margin-top:6px;'>Bloque: Semana {sem_idx or '—'} de {sem_total or '—'}</div>
+                              <div class='muted' style='margin-top:2px;'>Días completados: {dias_label}</div>
+                              <div style='margin-top:8px;'>{fecha_badge}</div>
+                              {badge_html}
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                        if info_comentario:
+                            cliente_key = _norm_mail(correo_cli) or f"cliente_{idx}"
+                            toggle_key = f"mostrar_comentarios_{cliente_key}"
+                            btn_key = f"ver_comentarios_btn_{cliente_key}"
+                            if toggle_key not in st.session_state:
+                                st.session_state[toggle_key] = False
+                            if st.button("👁️ Ver comentarios", key=btn_key, use_container_width=True):
+                                st.session_state[toggle_key] = not st.session_state[toggle_key]
+                            if st.session_state.get(toggle_key):
+                                tabla_html = _comentarios_table_html(info_comentario.get("comentarios", []))
+                                if tabla_html:
+                                    st.markdown(tabla_html, unsafe_allow_html=True)
 
         return  # ⬅️ no renderizamos la vista de deportista
 
