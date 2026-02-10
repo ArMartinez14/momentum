@@ -1717,6 +1717,7 @@ def ver_rutinas():
         rutinas_cliente = [r for r in rutinas_all if (r.get("correo","") or "").strip().lower()==correo_raw]
         cliente_sel = nombre
         cliente_sel_key = _nombre_cliente_llave(cliente_sel)
+        objetivo_placeholder = st.container()
 
     if not rutinas_cliente:
         st.warning("⚠️ No se encontraron rutinas para ese cliente.")
