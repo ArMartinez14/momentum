@@ -4,8 +4,14 @@ import unicodedata
 from datetime import date, timedelta, datetime, timezone
 import pandas as pd
 import uuid
-# Agente de sugerencias de pesos
-from agente_rutinas import agente_sugerencia_rutina
+# Agente de sugerencias de pesos (opcional)
+try:
+    from agente_rutinas import agente_sugerencia_rutina
+except Exception as _agente_import_error:
+    def agente_sugerencia_rutina(*args, **kwargs):
+        raise RuntimeError(
+            f"No se pudo cargar el módulo de sugerencias (agente_rutinas): {_agente_import_error}"
+        )
 # Catálogos para caracteristica / patrón / grupo
 from servicio_catalogos import get_catalogos, add_item
 from firebase_admin import firestore
@@ -929,11 +935,18 @@ def _sync_cardio_state_from_widgets(dia_idx: int) -> dict:
 
 
 def _sincronizar_cardio_formulario(dias_labels: list[str]) -> None:
-    """Asegura que todos los días envíen sus valores recientes de cardio a session_state."""
-    for idx in range(len(dias_labels)):
-        cardio_key = f"rutina_dia_{idx + 1}_Cardio"
+    """Sincroniza cardio del día activo para evitar sobrescrituras entre días."""
+    indices_a_sincronizar: list[int] = []
+    dia_activo = st.session_state.get("dia_editor_activo")
+    if isinstance(dia_activo, str) and dia_activo in dias_labels:
+        indices_a_sincronizar = [dias_labels.index(dia_activo) + 1]
+    else:
+        indices_a_sincronizar = list(range(1, len(dias_labels) + 1))
+
+    for dia_idx in indices_a_sincronizar:
+        cardio_key = f"rutina_dia_{dia_idx}_Cardio"
         if cardio_key in st.session_state:
-            _sync_cardio_state_from_widgets(idx + 1)
+            _sync_cardio_state_from_widgets(dia_idx)
 
 
 def _construir_datos_borrador(dias_labels: list[str]) -> dict:
